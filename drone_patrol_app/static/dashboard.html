@@ -1,0 +1,1762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drone Patrol Tactical Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root {
+      --bg: #07110d;
+      --bg-alt: #0a1712;
+      --panel: rgba(8, 22, 18, 0.88);
+      --panel-strong: rgba(10, 28, 22, 0.96);
+      --grid: rgba(98, 255, 176, 0.09);
+      --line: rgba(120, 255, 185, 0.24);
+      --text: #c6f7da;
+      --muted: #6b9a83;
+      --green: #74ffae;
+      --amber: #ffbe55;
+      --red: #ff6767;
+      --cyan: #80f4ff;
+      --shadow: 0 0 22px rgba(116, 255, 174, 0.12);
+      --border: rgba(117, 255, 176, 0.22);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top, rgba(55, 128, 84, 0.16), transparent 38%),
+        linear-gradient(180deg, #040807 0%, #07110d 32%, #050908 100%);
+      color: var(--text);
+      font-family: "Rajdhani", sans-serif;
+      overflow: hidden;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    body::before {
+      background:
+        repeating-linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.03) 0,
+          rgba(255, 255, 255, 0.03) 1px,
+          transparent 2px,
+          transparent 5px
+        );
+      mix-blend-mode: soft-light;
+      opacity: 0.2;
+    }
+
+    body::after {
+      background:
+        linear-gradient(90deg, transparent 0%, rgba(117, 255, 176, 0.03) 48%, transparent 100%);
+      animation: sweep 8s linear infinite;
+      opacity: 0.4;
+    }
+
+    .dashboard {
+      position: relative;
+      min-height: 100vh;
+      padding: 18px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr 1.4fr 0.9fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .status-tile,
+    .panel {
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(17, 37, 30, 0.86), rgba(8, 22, 18, 0.92));
+      border: 1px solid var(--border);
+      box-shadow: inset 0 0 0 1px rgba(255, 190, 85, 0.06), var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .status-tile::before,
+    .panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255, 190, 85, 0.08), transparent 26%, transparent 74%, rgba(116, 255, 174, 0.04));
+      pointer-events: none;
+    }
+
+    .status-tile {
+      min-height: 92px;
+      padding: 12px 16px;
+    }
+
+    .tile-label,
+    .panel-label,
+    .subtle-label {
+      font-family: "Share Tech Mono", monospace;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+
+    .tile-value {
+      margin-top: 12px;
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      font-size: clamp(1.6rem, 2.4vw, 2.4rem);
+      font-weight: 700;
+      color: var(--green);
+      text-shadow: 0 0 12px rgba(116, 255, 174, 0.28);
+    }
+
+    .tile-meta {
+      margin-top: 4px;
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.82rem;
+      color: var(--amber);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 2.2fr) minmax(320px, 0.95fr);
+      gap: 16px;
+      min-height: 0;
+    }
+
+    .map-panel {
+      padding: 14px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .panel-title {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .panel-title strong {
+      font-size: 1.32rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+
+    .header-meta {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .route-mode-controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .route-mode-button {
+      border: 1px solid rgba(255, 190, 85, 0.28);
+      background: rgba(9, 21, 17, 0.82);
+      color: var(--muted);
+      padding: 7px 12px;
+      cursor: pointer;
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.74rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      transition: color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    }
+
+    .route-mode-button:hover {
+      color: var(--amber);
+      border-color: rgba(255, 190, 85, 0.56);
+    }
+
+    .route-mode-button.active {
+      color: var(--green);
+      border-color: rgba(116, 255, 174, 0.58);
+      background: rgba(13, 36, 28, 0.95);
+      box-shadow: inset 0 0 10px rgba(116, 255, 174, 0.1), 0 0 12px rgba(116, 255, 174, 0.1);
+    }
+
+    .map-toolbar {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(117, 255, 176, 0.14);
+      background: rgba(7, 20, 16, 0.88);
+      font-family: "Share Tech Mono", monospace;
+    }
+
+    .map-input-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .map-input {
+      width: 108px;
+      padding: 7px 9px;
+      border: 1px solid rgba(117, 255, 176, 0.18);
+      background: rgba(7, 16, 13, 0.92);
+      color: var(--text);
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.8rem;
+    }
+
+    .map-input.zoom {
+      width: 70px;
+    }
+
+    .action-button {
+      border: 1px solid rgba(117, 255, 176, 0.24);
+      background: rgba(9, 21, 17, 0.88);
+      color: var(--text);
+      padding: 8px 12px;
+      cursor: pointer;
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.74rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .action-button:hover {
+      color: var(--amber);
+      border-color: rgba(255, 190, 85, 0.48);
+    }
+
+    .action-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.42;
+      color: var(--muted);
+      border-color: rgba(117, 255, 176, 0.12);
+    }
+
+    .action-button.active {
+      color: var(--green);
+      border-color: rgba(116, 255, 174, 0.52);
+      background: rgba(14, 33, 26, 0.96);
+    }
+
+    .map-shell {
+      position: relative;
+      min-height: 520px;
+      border: 1px solid rgba(116, 255, 174, 0.16);
+      background:
+        radial-gradient(circle at center, rgba(116, 255, 174, 0.05), transparent 58%),
+        linear-gradient(180deg, rgba(8, 22, 18, 0.88), rgba(6, 15, 12, 0.98));
+      overflow: hidden;
+    }
+
+    .map-shell::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 36px 36px;
+      opacity: 0.66;
+      pointer-events: none;
+    }
+
+    .map-shell::after {
+      content: "";
+      position: absolute;
+      inset: 18px 18px 18px 18px;
+      border: 1px solid rgba(255, 190, 85, 0.18);
+      pointer-events: none;
+    }
+
+    #leaflet-map {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .leaflet-container {
+      background: #08120f;
+      font-family: "Share Tech Mono", monospace;
+    }
+
+    .leaflet-control-attribution,
+    .leaflet-control-scale {
+      filter: invert(1) hue-rotate(110deg) saturate(0.4);
+      opacity: 0.7;
+    }
+
+    .leaflet-tooltip.vertex-tooltip {
+      padding: 4px 7px;
+      border: 1px solid rgba(128, 244, 255, 0.5);
+      border-radius: 999px;
+      background: rgba(6, 18, 14, 0.94);
+      color: var(--cyan);
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      box-shadow: 0 0 12px rgba(128, 244, 255, 0.16);
+    }
+
+    .leaflet-tooltip.vertex-tooltip::before {
+      display: none;
+    }
+
+    .map-guidance {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      z-index: 500;
+      padding: 10px 12px;
+      max-width: 280px;
+      border: 1px solid rgba(117, 255, 176, 0.2);
+      background: rgba(7, 18, 14, 0.88);
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.74rem;
+      line-height: 1.45;
+      color: var(--muted);
+      backdrop-filter: blur(6px);
+    }
+
+    .drone-div-icon,
+    .dock-div-icon {
+      background: transparent;
+      border: 0;
+    }
+
+    .drone-marker {
+      position: relative;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform: rotate(var(--heading, 0deg));
+    }
+
+    .drone-marker .cone {
+      position: absolute;
+      left: 16px;
+      top: 3px;
+      width: 0;
+      height: 0;
+      border-top: 12px solid transparent;
+      border-bottom: 12px solid transparent;
+      border-left: 32px solid rgba(116, 255, 174, 0.16);
+      transform: translateX(4px);
+      filter: drop-shadow(0 0 4px rgba(116, 255, 174, 0.24));
+    }
+
+    .drone-marker .body {
+      position: relative;
+      width: 18px;
+      height: 18px;
+      border: 2px solid currentColor;
+      background: rgba(5, 10, 8, 0.9);
+      transform: rotate(45deg);
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .drone-marker .body::before,
+    .drone-marker .body::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 26px;
+      height: 2px;
+      background: currentColor;
+      transform-origin: center;
+      transform: translate(-50%, -50%) rotate(45deg);
+      opacity: 0.72;
+    }
+
+    .drone-marker .body::after {
+      transform: translate(-50%, -50%) rotate(-45deg);
+    }
+
+    .drone-marker .label {
+      position: absolute;
+      left: 50%;
+      top: 36px;
+      transform: translateX(-50%) rotate(calc(var(--heading, 0deg) * -1));
+      color: currentColor;
+      font-family: "Share Tech Mono", monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      white-space: nowrap;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+    }
+
+    .dock-marker {
+      padding: 6px 8px;
+      border: 1px solid rgba(128, 244, 255, 0.48);
+      background: rgba(8, 20, 18, 0.9);
+      color: var(--cyan);
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      box-shadow: 0 0 12px rgba(128, 244, 255, 0.14);
+      white-space: nowrap;
+    }
+
+    .map-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-family: "Share Tech Mono", monospace;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .legend {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .legend i {
+      width: 18px;
+      height: 2px;
+      background: var(--green);
+      box-shadow: 0 0 10px rgba(116, 255, 174, 0.32);
+    }
+
+    .legend .patrol i {
+      background: repeating-linear-gradient(90deg, var(--amber) 0 6px, transparent 6px 11px);
+      height: 3px;
+    }
+
+    .legend .alert i {
+      background: var(--red);
+    }
+
+    .side-column {
+      display: grid;
+      grid-template-rows: auto minmax(230px, 0.95fr) minmax(0, 1.15fr);
+      gap: 16px;
+      min-height: 0;
+    }
+
+    .connection-panel,
+    .fleet-panel,
+    .log-panel {
+      padding: 14px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    .connection-panel {
+      grid-template-rows: auto auto auto;
+    }
+
+    .connection-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .connection-input {
+      width: 100%;
+      padding: 11px 12px;
+      border: 1px solid rgba(117, 255, 176, 0.18);
+      background: rgba(7, 16, 13, 0.92);
+      color: var(--text);
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.8rem;
+      letter-spacing: 0.04em;
+    }
+
+    .connection-status-card {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid rgba(117, 255, 176, 0.14);
+      background: rgba(11, 25, 20, 0.85);
+      box-shadow: inset 0 0 18px rgba(116, 255, 174, 0.03);
+    }
+
+    .connection-status-row,
+    .connection-meta-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .connection-meta-row {
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+
+    .connection-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px;
+      border: 1px solid currentColor;
+      background: rgba(255, 255, 255, 0.04);
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .connection-badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    .connection-status-disconnected {
+      color: var(--red);
+    }
+
+    .connection-status-connecting {
+      color: var(--amber);
+    }
+
+    .connection-status-connected {
+      color: var(--green);
+    }
+
+    .connection-value {
+      font-size: 1.04rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--text);
+    }
+
+    .fleet-list,
+    .log-list {
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .fleet-list {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .drone-card {
+      padding: 12px;
+      border: 1px solid rgba(117, 255, 176, 0.14);
+      background: rgba(11, 25, 20, 0.85);
+      box-shadow: inset 0 0 18px rgba(116, 255, 174, 0.03);
+    }
+
+    .drone-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .drone-name {
+      font-size: 1.08rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .status-badge {
+      padding: 3px 8px;
+      border: 1px solid currentColor;
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .status-flying {
+      color: var(--green);
+    }
+
+    .status-charging {
+      color: var(--amber);
+    }
+
+    .status-standby {
+      color: var(--cyan);
+    }
+
+    .status-failed {
+      color: var(--red);
+    }
+
+    .drone-meta {
+      margin-top: 8px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+
+    .battery-wrap {
+      margin-top: 10px;
+    }
+
+    .battery-track {
+      width: 100%;
+      height: 12px;
+      border: 1px solid rgba(117, 255, 176, 0.18);
+      background: rgba(3, 10, 8, 0.8);
+      overflow: hidden;
+    }
+
+    .battery-fill {
+      height: 100%;
+      width: 0;
+      transition: width 1.4s ease, background-color 0.8s ease, box-shadow 0.8s ease;
+      box-shadow: 0 0 16px currentColor;
+    }
+
+    .log-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .log-entry {
+      padding: 10px 12px;
+      border-left: 2px solid rgba(116, 255, 174, 0.34);
+      background: rgba(8, 18, 15, 0.92);
+      font-family: "Share Tech Mono", monospace;
+      line-height: 1.45;
+      font-size: 0.82rem;
+      color: #bdeacb;
+    }
+
+    .log-entry.alert {
+      border-left-color: var(--amber);
+      color: #ffd79a;
+    }
+
+    .log-entry.critical {
+      border-left-color: var(--red);
+      color: #ffacac;
+    }
+
+    .log-time {
+      color: var(--muted);
+      margin-right: 8px;
+    }
+
+    .map-text,
+    .zone-label,
+    .north-label,
+    .gps-tag {
+      font-family: "Share Tech Mono", monospace;
+      letter-spacing: 0.12em;
+    }
+
+    .zone-label {
+      font-size: 12px;
+      fill: rgba(255, 190, 85, 0.88);
+    }
+
+    .map-text {
+      font-size: 12px;
+      fill: rgba(198, 247, 218, 0.84);
+    }
+
+    .north-label,
+    .gps-tag {
+      font-size: 11px;
+      fill: rgba(107, 154, 131, 0.88);
+    }
+
+    .site-outline {
+      fill: rgba(24, 68, 48, 0.16);
+      stroke: rgba(116, 255, 174, 0.95);
+      stroke-width: 3;
+      filter: drop-shadow(0 0 10px rgba(116, 255, 174, 0.24));
+    }
+
+    .patrol-path {
+      fill: none;
+      stroke: rgba(255, 190, 85, 0.92);
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-dasharray: 3 12;
+      filter: drop-shadow(0 0 6px rgba(255, 190, 85, 0.26));
+      animation: routePulse 5.5s linear infinite;
+    }
+
+    .drone-group {
+      transition: transform 0.8s linear;
+    }
+
+    .drone-cone {
+      fill: rgba(116, 255, 174, 0.1);
+      stroke: rgba(116, 255, 174, 0.3);
+      stroke-width: 1.2;
+      transform-origin: center;
+    }
+
+    .drone-icon {
+      fill: #08110d;
+      stroke: currentColor;
+      stroke-width: 2;
+      filter: drop-shadow(0 0 9px currentColor);
+    }
+
+    .drone-ring {
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      opacity: 0.45;
+      animation: ping 3.4s ease-out infinite;
+      transform-origin: center;
+    }
+
+    .drone-label {
+      font-family: "Share Tech Mono", monospace;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-anchor: middle;
+      fill: currentColor;
+    }
+
+    .map-alert {
+      stroke: rgba(255, 103, 103, 0.8);
+      fill: rgba(255, 103, 103, 0.12);
+      stroke-width: 1.4;
+      animation: pulseAlert 2s ease-in-out infinite;
+    }
+
+    .charging-station {
+      fill: rgba(128, 244, 255, 0.08);
+      stroke: rgba(128, 244, 255, 0.72);
+      stroke-width: 2;
+    }
+
+    @keyframes sweep {
+      0% { transform: translateX(-35%); }
+      100% { transform: translateX(135%); }
+    }
+
+    @keyframes routePulse {
+      0% { stroke-dashoffset: 0; }
+      100% { stroke-dashoffset: -120; }
+    }
+
+    @keyframes ping {
+      0% { transform: scale(0.9); opacity: 0.46; }
+      70% { transform: scale(1.25); opacity: 0.06; }
+      100% { transform: scale(1.38); opacity: 0; }
+    }
+
+    @keyframes pulseAlert {
+      0%, 100% { opacity: 0.35; }
+      50% { opacity: 0.95; }
+    }
+
+    @media (max-width: 1100px) {
+      body {
+        overflow: auto;
+      }
+
+      .dashboard {
+        min-height: auto;
+      }
+
+      .topbar,
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .side-column {
+        grid-template-rows: auto auto;
+      }
+
+      .map-shell {
+        min-height: 420px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <div class="topbar">
+      <div class="status-tile">
+        <div class="tile-label">Active Drones</div>
+        <div class="tile-value"><span id="active-count">02</span><span class="subtle-label">airborne</span></div>
+        <div class="tile-meta">Construction Site Sector Patrol</div>
+      </div>
+      <div class="status-tile">
+        <div class="tile-label">Coverage</div>
+        <div class="tile-value"><span id="coverage-value">91</span><span class="subtle-label">percent</span></div>
+        <div class="tile-meta">Perimeter & yard lanes monitored</div>
+      </div>
+      <div class="status-tile">
+        <div class="tile-label">Last Alert</div>
+        <div class="tile-value" id="last-alert" style="font-size: clamp(1.1rem, 1.7vw, 1.6rem); color: var(--amber);">Motion detected - Zone B</div>
+        <div class="tile-meta" id="alert-meta">Thermal camera confirm pending</div>
+      </div>
+      <div class="status-tile">
+        <div class="tile-label">System Time</div>
+        <div class="tile-value"><span id="system-time">00:00:00</span></div>
+        <div class="tile-meta" id="system-date">0000-00-00 UTC-6</div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <section class="panel map-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span class="panel-label">Tactical Map Panel</span>
+            <strong>Ranch / Site Perimeter Monitor</strong>
+            <div class="route-mode-controls">
+              <button class="route-mode-button active" data-route-mode="perimeter" type="button">Perimeter</button>
+              <button class="route-mode-button" data-route-mode="coverage" type="button">Coverage Sweep</button>
+              <button class="route-mode-button" data-route-mode="grid" type="button">Grid Survey</button>
+            </div>
+          </div>
+          <div class="header-meta">
+            <span id="geofence-count">GEOFENCE: -- VERTICES</span>
+            <span id="route-label">ROUTE: --</span>
+            <span>MODE: AUTONOMOUS PATROL</span>
+          </div>
+        </div>
+
+        <div class="map-shell">
+          <div class="map-toolbar">
+            <label class="map-input-group">Lat
+              <input id="center-lat" class="map-input" type="number" step="0.000001" placeholder="Latitude">
+            </label>
+            <label class="map-input-group">Lon
+              <input id="center-lon" class="map-input" type="number" step="0.000001" placeholder="Longitude">
+            </label>
+            <label class="map-input-group">Zoom
+              <input id="center-zoom" class="map-input zoom" type="number" min="1" max="20" step="1" value="16">
+            </label>
+            <button id="set-map-center" class="action-button" type="button">Set Map</button>
+            <button id="use-browser-location" class="action-button" type="button">Use My Location</button>
+            <button id="toggle-draw-mode" class="action-button" type="button">Draw Geofence</button>
+            <button id="undo-geofence-point" class="action-button" type="button" disabled>Undo Last Point</button>
+            <button id="apply-geofence" class="action-button" type="button">Apply Geofence</button>
+            <button id="clear-geofence-draft" class="action-button" type="button">Clear Draft</button>
+          </div>
+          <div id="leaflet-map" aria-label="Drone patrol tactical map"></div>
+          <div class="map-guidance">
+            Set a real site center, then click <strong>Draw Geofence</strong> and tap the map to place each boundary point.
+            Double-click to close the polygon and auto-generate the active route, or use <strong>Apply Geofence</strong>.
+          </div>
+        </div>
+
+        <div class="map-footer">
+          <div class="legend">
+            <span><i></i> geofence perimeter</span>
+            <span class="patrol"><i></i> patrol route</span>
+            <span class="alert"><i></i> alert zone</span>
+          </div>
+          <div>REAL MAP MODE | CLICK-TO-DRAW GEOFENCE | LIVE TELEMETRY READY</div>
+        </div>
+      </section>
+
+      <div class="side-column">
+        <section class="panel connection-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="panel-label">Telemetry Link</span>
+              <strong>Drone Connection</strong>
+            </div>
+            <div class="header-meta">
+              <span>MAVLINK</span>
+            </div>
+          </div>
+          <div class="connection-form">
+            <input
+              id="connection-string"
+              class="connection-input"
+              type="text"
+              placeholder="tcp:127.0.0.1:5760 or udp:127.0.0.1:14550"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button id="connect-drone" class="action-button" type="button">Connect</button>
+          </div>
+          <div class="connection-status-card">
+            <div class="connection-status-row">
+              <span class="subtle-label">Telemetry Status</span>
+              <span id="connection-status-badge" class="connection-badge connection-status-disconnected">Disconnected</span>
+            </div>
+            <div id="connection-status-text" class="connection-value">No telemetry link active</div>
+            <div class="connection-meta-row">
+              <span id="connection-drone-id">Drone ID: --</span>
+              <span id="connection-status-meta">Awaiting MAVLink connection string</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel fleet-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="panel-label">Fleet Status</span>
+              <strong>Vehicle Readiness</strong>
+            </div>
+            <div class="header-meta">
+              <span>3 UNITS</span>
+              <span>1 DOCK</span>
+            </div>
+          </div>
+          <div class="fleet-list" id="fleet-list"></div>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="panel-label">Event Log</span>
+              <strong>Operational Feed</strong>
+            </div>
+            <div class="header-meta">
+              <span>LIVE TELEMETRY</span>
+            </div>
+          </div>
+          <div class="log-list" id="log-list"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const fleetList = document.getElementById("fleet-list");
+    const logList = document.getElementById("log-list");
+    const systemTime = document.getElementById("system-time");
+    const systemDate = document.getElementById("system-date");
+    const activeCount = document.getElementById("active-count");
+    const coverageValue = document.getElementById("coverage-value");
+    const lastAlert = document.getElementById("last-alert");
+    const alertMeta = document.getElementById("alert-meta");
+    const geofenceCount = document.getElementById("geofence-count");
+    const routeLabel = document.getElementById("route-label");
+    const routeModeButtons = Array.from(document.querySelectorAll("[data-route-mode]"));
+    const connectionStringInput = document.getElementById("connection-string");
+    const connectDroneButton = document.getElementById("connect-drone");
+    const connectionStatusBadge = document.getElementById("connection-status-badge");
+    const connectionStatusText = document.getElementById("connection-status-text");
+    const connectionDroneId = document.getElementById("connection-drone-id");
+    const connectionStatusMeta = document.getElementById("connection-status-meta");
+    const centerLatInput = document.getElementById("center-lat");
+    const centerLonInput = document.getElementById("center-lon");
+    const centerZoomInput = document.getElementById("center-zoom");
+    const setMapCenterButton = document.getElementById("set-map-center");
+    const useBrowserLocationButton = document.getElementById("use-browser-location");
+    const toggleDrawModeButton = document.getElementById("toggle-draw-mode");
+    const undoGeofencePointButton = document.getElementById("undo-geofence-point");
+    const applyGeofenceButton = document.getElementById("apply-geofence");
+    const clearGeofenceDraftButton = document.getElementById("clear-geofence-draft");
+    const COLLEGE_STATION_CENTER = {
+      latitude: 30.62798,
+      longitude: -96.33441,
+      zoom: 15
+    };
+    const ROUTE_MODE_LABELS = {
+      perimeter: "Perimeter Patrol",
+      coverage: "Coverage Sweep",
+      grid: "Grid Survey"
+    };
+    const DRONE_COLORS = {
+      green: "#74ffae",
+      amber: "#ffbe55",
+      red: "#ff6767",
+      cyan: "#80f4ff"
+    };
+    const state = {
+      activeRouteMode: "perimeter",
+      draftClickTimer: null,
+      draftPoints: [],
+      drawMode: false,
+      droneMarkers: new Map(),
+      dockMarker: null,
+      hasInitialView: false,
+      layers: null,
+      map: null,
+      pendingConnectionString: "",
+      payload: null,
+      reconnectAttempt: 0,
+      routeWaypointMarkers: [],
+      shouldRefocusMap: false
+    };
+
+    function formatClock(date) {
+      return date.toLocaleTimeString("en-US", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    function formatDate(date) {
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} UTC-6`;
+    }
+
+    function batteryColor(drone) {
+      const status = String(drone.status || "").toUpperCase();
+      const battery = Number(drone.battery_level || 0);
+      if (status === "FAILED") {
+        return "var(--red)";
+      }
+      if (battery <= 25) {
+        return "var(--amber)";
+      }
+      return status === "CHARGING" ? "var(--cyan)" : "var(--green)";
+    }
+
+    function droneHexColor(drone) {
+      const color = batteryColor(drone);
+      if (color === "var(--red)") {
+        return DRONE_COLORS.red;
+      }
+      if (color === "var(--amber)") {
+        return DRONE_COLORS.amber;
+      }
+      if (color === "var(--cyan)") {
+        return DRONE_COLORS.cyan;
+      }
+      return DRONE_COLORS.green;
+    }
+
+    function dronePositionText(drone) {
+      const point = drone.position;
+      if (!point) {
+        return "Lat -- Lon --";
+      }
+      return `Lat ${point.latitude.toFixed(4)} Lon ${point.longitude.toFixed(4)}`;
+    }
+
+    function statusClass(status) {
+      return `status-${String(status || "").toLowerCase()}`;
+    }
+
+    function formatRouteMode(routeMode) {
+      return ROUTE_MODE_LABELS[routeMode] || ROUTE_MODE_LABELS.perimeter;
+    }
+
+    function setAlertBanner(title, meta) {
+      lastAlert.textContent = title;
+      alertMeta.textContent = meta;
+    }
+
+    function syncRouteButtons(routeMode) {
+      state.activeRouteMode = routeMode;
+      routeModeButtons.forEach((button) => {
+        button.classList.toggle("active", button.dataset.routeMode === routeMode);
+      });
+    }
+
+    function latLngFromPoint(point) {
+      return [Number(point.latitude), Number(point.longitude)];
+    }
+
+    function routeLatLngs(route) {
+      return (route || []).map((item) => [Number(item.x_lat), Number(item.y_lon)]);
+    }
+
+    function geofenceLatLngs(points) {
+      return (points || []).map(latLngFromPoint);
+    }
+
+    function setCenterInputs(latitude, longitude, zoom) {
+      centerLatInput.value = Number(latitude).toFixed(6);
+      centerLonInput.value = Number(longitude).toFixed(6);
+      centerZoomInput.value = String(zoom);
+    }
+
+    function syncCenterInputsFromMap() {
+      if (!state.map) {
+        return;
+      }
+      const center = state.map.getCenter();
+      setCenterInputs(center.lat, center.lng, state.map.getZoom());
+    }
+
+    function dockIcon() {
+      return L.divIcon({
+        className: "dock-div-icon",
+        html: '<div class="dock-marker">DOCK CHG-01</div>',
+        iconSize: [96, 28],
+        iconAnchor: [48, 14]
+      });
+    }
+
+    function droneIcon(drone) {
+      const heading = Number(drone.heading_deg || 0);
+      const color = droneHexColor(drone);
+      return L.divIcon({
+        className: "drone-div-icon",
+        html: `
+          <div class="drone-marker" style="--heading:${heading}deg; color:${color};">
+            <span class="cone"></span>
+            <span class="body"></span>
+            <span class="label">${drone.drone_id}</span>
+          </div>
+        `,
+        iconSize: [34, 48],
+        iconAnchor: [17, 17]
+      });
+    }
+
+    function clearRouteWaypointMarkers() {
+      state.routeWaypointMarkers.forEach((marker) => marker.remove());
+      state.routeWaypointMarkers = [];
+    }
+
+    function clearDraftLayers() {
+      state.layers.draftVertices.clearLayers();
+      state.layers.draftOverlay.clearLayers();
+    }
+
+    function clearDraftGeofence() {
+      state.draftPoints = [];
+      clearDraftLayers();
+      updateDraftControls();
+      refreshGeofenceCount();
+    }
+
+    function updateDraftControls() {
+      const draftCount = state.draftPoints.length;
+      const savedCount = ((state.payload && state.payload.geofence) || []).length;
+      const canApplyDraft = draftCount >= 3;
+      const canApplySaved = draftCount === 0 && savedCount >= 3;
+      undoGeofencePointButton.disabled = draftCount === 0;
+      clearGeofenceDraftButton.disabled = draftCount === 0;
+      applyGeofenceButton.disabled = !(canApplyDraft || canApplySaved);
+    }
+
+    function refreshGeofenceCount() {
+      if (state.draftPoints.length) {
+        geofenceCount.textContent = `DRAFT: ${state.draftPoints.length} VERTICES`;
+        return;
+      }
+      geofenceCount.textContent = `GEOFENCE: ${((state.payload && state.payload.geofence) || []).length} VERTICES`;
+    }
+
+    function renderFleet(drones) {
+      fleetList.innerHTML = "";
+
+      drones.forEach((drone, index) => {
+        const card = document.createElement("div");
+        card.className = "drone-card";
+        const battery = Math.max(0, Math.min(100, Number(drone.battery_level || 0)));
+        const color = batteryColor(drone);
+        const detail = drone.failure_reason || (drone.flight_mode ? `Mode ${drone.flight_mode}` : "Telemetry nominal");
+
+        card.innerHTML = `
+          <div class="drone-row">
+            <div class="drone-name">Drone ${index + 1}</div>
+            <div class="status-badge ${statusClass(drone.status)}">${String(drone.status).toUpperCase()}</div>
+          </div>
+          <div class="drone-meta">
+            <span>${drone.drone_id}</span>
+            <span>${dronePositionText(drone)}</span>
+          </div>
+          <div class="drone-meta">
+            <span>${detail}</span>
+            <span>${Math.round(battery)}%</span>
+          </div>
+          <div class="drone-meta">
+            <span>Heading ${Math.round(Number(drone.heading_deg || 0))}°</span>
+            <span>${drone.armed ? "ARMED" : "SAFE"}</span>
+          </div>
+          <div class="battery-wrap">
+            <div class="battery-track">
+              <div class="battery-fill" style="width:${battery}%; background:${color}; color:${color};"></div>
+            </div>
+          </div>
+        `;
+        fleetList.appendChild(card);
+      });
+    }
+
+    function renderLog(entries) {
+      logList.innerHTML = "";
+      entries.slice(0, 9).forEach((entry) => {
+        const row = document.createElement("div");
+        row.className = `log-entry ${entry.level === "info" ? "" : entry.level}`.trim();
+        const timestamp = entry.timestamp ? formatClock(new Date(entry.timestamp)) : "--:--:--";
+        const meta = entry.meta ? `<div style="color:var(--muted); margin-top:4px;">${entry.meta}</div>` : "";
+        row.innerHTML = `<span class="log-time">${timestamp}</span>${entry.text}${meta}`;
+        logList.appendChild(row);
+      });
+    }
+
+    function updateHeader(payload) {
+      const summary = payload.summary || {};
+      activeCount.textContent = String(summary.active_drones || 0).padStart(2, "0");
+      coverageValue.textContent = String(summary.coverage_percent || 0);
+      routeLabel.textContent = `ROUTE: ${formatRouteMode(payload.route_mode || "perimeter").toUpperCase()}`;
+      syncRouteButtons(payload.route_mode || "perimeter");
+      refreshGeofenceCount();
+
+      const alert = summary.last_alert;
+      lastAlert.textContent = alert ? alert.text : "No active alerts";
+      alertMeta.textContent = alert ? (alert.meta || "Monitoring") : "Fleet monitoring online";
+    }
+
+    function renderDraftGeofence() {
+      clearDraftLayers();
+      if (!state.draftPoints.length) {
+        refreshGeofenceCount();
+        return;
+      }
+
+      const latLngs = geofenceLatLngs(state.draftPoints);
+      latLngs.forEach((latLng, index) => {
+        state.layers.draftVertices.addLayer(L.circleMarker(latLng, {
+          radius: 5,
+          color: DRONE_COLORS.cyan,
+          weight: 2,
+          fillColor: DRONE_COLORS.cyan,
+          fillOpacity: 0.9
+        }).bindTooltip(`D${index + 1}`, {
+          className: "vertex-tooltip",
+          permanent: true,
+          direction: "top",
+          offset: [0, -10]
+        }));
+      });
+
+      if (latLngs.length >= 3) {
+        state.layers.draftOverlay.addLayer(L.polygon(latLngs, {
+          color: DRONE_COLORS.cyan,
+          weight: 2,
+          fillColor: DRONE_COLORS.cyan,
+          fillOpacity: 0.1,
+          dashArray: "6 8"
+        }));
+      } else if (latLngs.length >= 2) {
+        state.layers.draftOverlay.addLayer(L.polyline(latLngs, {
+          color: DRONE_COLORS.cyan,
+          weight: 2,
+          dashArray: "6 8"
+        }));
+      }
+
+      refreshGeofenceCount();
+      updateDraftControls();
+    }
+
+    function renderOperationalLayers(payload) {
+      const geofence = geofenceLatLngs(payload.geofence || []);
+      const route = routeLatLngs(payload.patrol_route || []);
+
+      state.layers.activeGeofence.clearLayers();
+      state.layers.activeRoute.clearLayers();
+      clearRouteWaypointMarkers();
+
+      if (geofence.length >= 3) {
+        state.layers.activeGeofence.addLayer(L.polygon(geofence, {
+          color: DRONE_COLORS.green,
+          weight: 3,
+          fillColor: "#1e4b35",
+          fillOpacity: 0.18
+        }));
+
+        geofence.forEach((latLng, index) => {
+          state.layers.activeGeofence.addLayer(L.circleMarker(latLng, {
+            radius: 5,
+            color: DRONE_COLORS.amber,
+            weight: 2,
+            fillColor: DRONE_COLORS.amber,
+            fillOpacity: 0.95
+          }).bindTooltip(`P${index + 1}`, {
+            className: "vertex-tooltip",
+            permanent: true,
+            direction: "top",
+            offset: [0, -10]
+          }));
+        });
+      }
+
+      if (route.length >= 2) {
+        state.layers.activeRoute.addLayer(L.polyline(route, {
+          color: DRONE_COLORS.amber,
+          weight: 3,
+          opacity: 0.95,
+          dashArray: "8 12"
+        }));
+
+        route.forEach((latLng, index) => {
+          const marker = L.circleMarker(latLng, {
+            radius: index === 0 ? 6 : 4,
+            color: DRONE_COLORS.amber,
+            weight: 1.5,
+            fillColor: index === 0 ? DRONE_COLORS.green : DRONE_COLORS.amber,
+            fillOpacity: 0.92
+          }).bindTooltip(`WP ${index + 1}`, { direction: "top" });
+          marker.addTo(state.map);
+          state.routeWaypointMarkers.push(marker);
+        });
+      }
+
+      if (payload.dock_position) {
+        const dockLatLng = latLngFromPoint(payload.dock_position);
+        if (!state.dockMarker) {
+          state.dockMarker = L.marker(dockLatLng, { icon: dockIcon() }).addTo(state.map);
+        } else {
+          state.dockMarker.setLatLng(dockLatLng);
+        }
+      } else if (state.dockMarker) {
+        state.dockMarker.remove();
+        state.dockMarker = null;
+      }
+    }
+
+    function syncDroneMarkers(drones, dockPosition) {
+      const activeDroneIds = new Set();
+      const fallback = dockPosition ? L.latLng(...latLngFromPoint(dockPosition)) : state.map.getCenter();
+
+      drones.forEach((drone) => {
+        activeDroneIds.add(drone.drone_id);
+        const position = drone.position ? L.latLng(...latLngFromPoint(drone.position)) : fallback;
+        const marker = state.droneMarkers.get(drone.drone_id);
+        if (marker) {
+          marker.setLatLng(position);
+          marker.setIcon(droneIcon(drone));
+          marker.bindTooltip(`${drone.drone_id} | ${String(drone.status).toUpperCase()} | ${Math.round(Number(drone.battery_level || 0))}%`);
+          return;
+        }
+
+        state.droneMarkers.set(
+          drone.drone_id,
+          L.marker(position, { icon: droneIcon(drone) })
+            .bindTooltip(`${drone.drone_id} | ${String(drone.status).toUpperCase()} | ${Math.round(Number(drone.battery_level || 0))}%`)
+            .addTo(state.map)
+        );
+      });
+
+      Array.from(state.droneMarkers.keys()).forEach((droneId) => {
+        if (activeDroneIds.has(droneId)) {
+          return;
+        }
+        const marker = state.droneMarkers.get(droneId);
+        if (marker) {
+          marker.remove();
+          state.droneMarkers.delete(droneId);
+        }
+      });
+    }
+
+    function focusMapOnMission(payload) {
+      const points = [
+        ...(payload.geofence || []),
+        ...((payload.patrol_route || []).map((item) => ({ latitude: item.x_lat, longitude: item.y_lon }))),
+        payload.dock_position
+      ].filter(Boolean);
+
+      if (!points.length) {
+        return;
+      }
+
+      state.map.fitBounds(L.latLngBounds(points.map(latLngFromPoint)).pad(0.2));
+      syncCenterInputsFromMap();
+    }
+
+    function syncMapView(payload) {
+      const center = payload.map_center || COLLEGE_STATION_CENTER;
+      if (!state.hasInitialView || state.shouldRefocusMap) {
+        if ((payload.geofence || []).length >= 3 || (payload.patrol_route || []).length >= 2) {
+          focusMapOnMission(payload);
+        } else {
+          state.map.setView([center.latitude, center.longitude], center.zoom || COLLEGE_STATION_CENTER.zoom);
+          syncCenterInputsFromMap();
+        }
+        state.hasInitialView = true;
+        state.shouldRefocusMap = false;
+        return;
+      }
+
+      if (!centerLatInput.value || !centerLonInput.value) {
+        setCenterInputs(center.latitude, center.longitude, center.zoom || state.map.getZoom());
+      }
+    }
+
+    function applyFleetPayload(payload) {
+      state.payload = payload;
+      renderOperationalLayers(payload);
+      renderFleet(payload.drones || []);
+      renderLog(payload.event_log || []);
+      updateHeader(payload);
+      updateDraftControls();
+      syncDroneMarkers(payload.drones || [], payload.dock_position);
+      syncMapView(payload);
+    }
+
+    function setDrawMode(enabled) {
+      state.drawMode = enabled;
+      toggleDrawModeButton.classList.toggle("active", enabled);
+      toggleDrawModeButton.textContent = enabled ? "Drawing Active" : "Draw Geofence";
+      state.map.getContainer().style.cursor = enabled ? "crosshair" : "";
+      if (enabled) {
+        state.map.doubleClickZoom.disable();
+        state.map.dragging.disable();
+        setAlertBanner("Draw mode armed", "Click to place vertices. Double-click to close and auto-generate the route.");
+        return;
+      }
+      state.map.dragging.enable();
+      state.map.doubleClickZoom.enable();
+    }
+
+    function pointPayloadFromLatLng(latLng) {
+      return {
+        latitude: Number(latLng.lat.toFixed(7)),
+        longitude: Number(latLng.lng.toFixed(7))
+      };
+    }
+
+    function addDraftPoint(latLng) {
+      const nextPoint = pointPayloadFromLatLng(latLng);
+      const previousPoint = state.draftPoints[state.draftPoints.length - 1];
+      if (
+        previousPoint &&
+        Math.abs(previousPoint.latitude - nextPoint.latitude) < 0.0000001 &&
+        Math.abs(previousPoint.longitude - nextPoint.longitude) < 0.0000001
+      ) {
+        return;
+      }
+      state.draftPoints.push(nextPoint);
+      renderDraftGeofence();
+      setAlertBanner("Draft geofence in progress", `${state.draftPoints.length} vertices placed. Double-click to close or press Apply Geofence.`);
+    }
+
+    function undoDraftPoint() {
+      if (!state.draftPoints.length) {
+        return;
+      }
+      state.draftPoints.pop();
+      renderDraftGeofence();
+      if (state.draftPoints.length) {
+        setAlertBanner("Draft geofence adjusted", `${state.draftPoints.length} vertices remain in the draft.`);
+        return;
+      }
+      setAlertBanner("Draft cleared", "All draft vertices were removed.");
+    }
+
+    function validateCenterInputs() {
+      const latitude = Number(centerLatInput.value);
+      const longitude = Number(centerLonInput.value);
+      const zoom = Number(centerZoomInput.value || COLLEGE_STATION_CENTER.zoom);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        throw new Error("Latitude and longitude are required to set the map center.");
+      }
+      return {
+        latitude,
+        longitude,
+        zoom: Math.max(1, Math.min(20, Math.round(zoom)))
+      };
+    }
+
+    async function fetchJson(url, options) {
+      const response = await fetch(url, options);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `Request failed with status ${response.status}`);
+      }
+      return payload;
+    }
+
+    async function loadFleetState() {
+      applyFleetPayload(await fetchJson("/api/fleet", {
+        headers: { Accept: "application/json" }
+      }));
+    }
+
+    async function saveMapCenter(center) {
+      state.shouldRefocusMap = true;
+      applyFleetPayload(await fetchJson("/api/map-center", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify(center)
+      }));
+      setAlertBanner("Map center updated", `${center.latitude.toFixed(5)}, ${center.longitude.toFixed(5)} | zoom ${center.zoom}`);
+    }
+
+    async function submitGeofence(points, routeMode = state.activeRouteMode) {
+      if (points.length < 3) {
+        throw new Error("Place at least three geofence vertices before generating a route.");
+      }
+
+      state.shouldRefocusMap = true;
+      const payload = await fetchJson("/api/geofence", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          coordinates: points,
+          route_mode: routeMode
+        })
+      });
+
+      clearDraftGeofence();
+      setDrawMode(false);
+      applyFleetPayload(payload);
+      setAlertBanner("Geofence committed", `${points.length} vertices | ${formatRouteMode(routeMode)} ready`);
+    }
+
+    async function setRouteMode(routeMode) {
+      syncRouteButtons(routeMode);
+
+      if (state.draftPoints.length >= 3) {
+        await submitGeofence(state.draftPoints, routeMode);
+        return;
+      }
+
+      const existingGeofence = (state.payload && state.payload.geofence) || [];
+      if (existingGeofence.length >= 3) {
+        await submitGeofence(existingGeofence, routeMode);
+        return;
+      }
+
+      routeLabel.textContent = `ROUTE: ${formatRouteMode(routeMode).toUpperCase()}`;
+      refreshGeofenceCount();
+      setAlertBanner("Route mode armed", `${formatRouteMode(routeMode)} will generate as soon as a geofence is applied.`);
+    }
+
+    function handleMapClick(event) {
+      if (!state.drawMode) {
+        return;
+      }
+      if (state.draftClickTimer) {
+        clearTimeout(state.draftClickTimer);
+      }
+      state.draftClickTimer = window.setTimeout(() => {
+        addDraftPoint(event.latlng);
+        state.draftClickTimer = null;
+      }, 200);
+    }
+
+    function handleMapDoubleClick(event) {
+      if (!state.drawMode) {
+        return;
+      }
+      if (state.draftClickTimer) {
+        clearTimeout(state.draftClickTimer);
+        state.draftClickTimer = null;
+      }
+      addDraftPoint(event.latlng);
+      submitGeofence(state.draftPoints, state.activeRouteMode).catch((error) => {
+        setAlertBanner("Geofence needs more vertices", error.message);
+      });
+    }
+
+    function initializeMap() {
+      state.map = L.map("leaflet-map", {
+        zoomControl: true
+      }).setView([COLLEGE_STATION_CENTER.latitude, COLLEGE_STATION_CENTER.longitude], COLLEGE_STATION_CENTER.zoom);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 20
+      }).addTo(state.map);
+
+      state.layers = {
+        activeGeofence: L.layerGroup().addTo(state.map),
+        activeRoute: L.layerGroup().addTo(state.map),
+        draftOverlay: L.layerGroup().addTo(state.map),
+        draftVertices: L.layerGroup().addTo(state.map)
+      };
+
+      state.map.on("click", handleMapClick);
+      state.map.on("dblclick", handleMapDoubleClick);
+      state.map.on("moveend", syncCenterInputsFromMap);
+      syncCenterInputsFromMap();
+      updateDraftControls();
+      window.setTimeout(() => state.map.invalidateSize(), 0);
+    }
+
+    function connectFleetSocket() {
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      const socket = new WebSocket(`${protocol}://${location.host}/ws/?EIO=4&transport=websocket`);
+
+      socket.addEventListener("open", () => {
+        state.reconnectAttempt = 0;
+      });
+
+      socket.addEventListener("message", (event) => {
+        const message = String(event.data);
+        if (message.startsWith("0")) {
+          socket.send("40");
+          return;
+        }
+        if (message === "2") {
+          socket.send("3");
+          return;
+        }
+        if (!message.startsWith("42")) {
+          return;
+        }
+        const packet = JSON.parse(message.slice(2));
+        if (packet[0] === "fleet_state") {
+          applyFleetPayload(packet[1]);
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        state.reconnectAttempt += 1;
+        const delay = Math.min(5000, state.reconnectAttempt * 1000);
+        setTimeout(connectFleetSocket, delay);
+      });
+    }
+
+    function startClock() {
+      function tick() {
+        const now = new Date();
+        systemTime.textContent = formatClock(now);
+        systemDate.textContent = formatDate(now);
+      }
+      tick();
+      setInterval(tick, 1000);
+    }
+
+    setMapCenterButton.addEventListener("click", () => {
+      Promise.resolve()
+        .then(() => saveMapCenter(validateCenterInputs()))
+        .catch((error) => {
+          setAlertBanner("Map center update failed", error.message);
+        });
+    });
+
+    useBrowserLocationButton.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        setAlertBanner("Browser location unavailable", "This browser does not expose geolocation.");
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const center = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            zoom: 17
+          };
+          setCenterInputs(center.latitude, center.longitude, center.zoom);
+          saveMapCenter(center).catch((error) => {
+            setAlertBanner("Map center update failed", error.message);
+          });
+        },
+        (error) => {
+          setAlertBanner("Unable to read browser location", error.message);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      );
+    });
+
+    toggleDrawModeButton.addEventListener("click", () => {
+      setDrawMode(!state.drawMode);
+    });
+
+    undoGeofencePointButton.addEventListener("click", () => {
+      undoDraftPoint();
+    });
+
+    applyGeofenceButton.addEventListener("click", () => {
+      const points = state.draftPoints.length ? state.draftPoints : ((state.payload && state.payload.geofence) || []);
+      submitGeofence(points, state.activeRouteMode).catch((error) => {
+        setAlertBanner("Geofence apply failed", error.message);
+      });
+    });
+
+    clearGeofenceDraftButton.addEventListener("click", () => {
+      clearDraftGeofence();
+      setAlertBanner("Draft cleared", "The active mission remains unchanged until a new geofence is applied.");
+    });
+
+    routeModeButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        setRouteMode(button.dataset.routeMode).catch((error) => {
+          setAlertBanner("Route update failed", error.message);
+        });
+      });
+    });
+
+    initializeMap();
+    startClock();
+    loadFleetState()
+      .catch((error) => {
+        setAlertBanner("Fleet API unavailable", error.message);
+      })
+      .finally(() => {
+        connectFleetSocket();
+      });
+  </script>
+</body>
+</html>
