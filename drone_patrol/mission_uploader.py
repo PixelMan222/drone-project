@@ -33,6 +33,9 @@ def upload_mission(
     wait_ready: bool = True,
     mode_change_timeout_s: float = 10.0,
     arm_timeout_s: float = 10.0,
+    takeoff_altitude_m: float = 10.0,
+    takeoff_confirm_altitude_m: float = 5.0,
+    takeoff_timeout_s: float = 10.0,
     connect_callable: VehicleConnector | None = None,
     mission_item_int_factory: MissionItemIntFactory | None = None,
     vehicle_mode_factory: VehicleModeFactory | None = None,
@@ -145,6 +148,34 @@ def upload_mission(
 
         try:
             flush_method = getattr(vehicle, "flush", None)
+            takeoff_method = getattr(vehicle, "simple_takeoff", None)
+            if not callable(takeoff_method):
+                raise RuntimeError("Connected vehicle does not support simple_takeoff for launch sequencing.")
+            print(f"[mission_uploader] Commanding takeoff to {takeoff_altitude_m:.1f} meters")
+            takeoff_method(takeoff_altitude_m)
+            if callable(flush_method):
+                flush_method()
+            reached_takeoff_altitude = _wait_for_condition(
+                lambda: (_vehicle_relative_altitude(vehicle) or 0.0) >= takeoff_confirm_altitude_m,
+                takeoff_timeout_s,
+            )
+            if reached_takeoff_altitude:
+                print(
+                    "[mission_uploader] Vehicle reached "
+                    f"{_vehicle_relative_altitude(vehicle) or 0.0:.1f} meters relative altitude before AUTO"
+                )
+            else:
+                print(
+                    "[mission_uploader] Warning: vehicle did not reach "
+                    f"{takeoff_confirm_altitude_m:.1f} meters within {takeoff_timeout_s:.1f}s; "
+                    f"current altitude={(_vehicle_relative_altitude(vehicle) or 0.0):.1f}m. Proceeding to AUTO."
+                )
+        except Exception as exc:
+            _log_upload_exception("commanding takeoff", exc)
+            raise MissionUploadError("commanding takeoff", exc) from exc
+
+        try:
+            flush_method = getattr(vehicle, "flush", None)
             print("[mission_uploader] Switching vehicle to AUTO mode")
             vehicle.mode = vehicle_mode_factory("AUTO")
             if callable(flush_method):
@@ -247,6 +278,22 @@ def _vehicle_mode_name(vehicle: Any) -> str | None:
     if mode is None:
         return None
     return getattr(mode, "name", mode)
+
+
+def _vehicle_relative_altitude(vehicle: Any) -> float | None:
+    location = getattr(vehicle, "location", None)
+    if location is None:
+        return None
+    relative_frame = getattr(location, "global_relative_frame", None)
+    if relative_frame is None:
+        return None
+    altitude = getattr(relative_frame, "alt", None)
+    if altitude is None:
+        return None
+    try:
+        return float(altitude)
+    except (TypeError, ValueError):
+        return None
 
 
 def _arm_failure_reason(vehicle: Any) -> str:

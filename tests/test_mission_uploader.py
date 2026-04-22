@@ -31,6 +31,7 @@ class FakeVehicle:
     def __init__(self) -> None:
         self.commands = FakeCommands()
         self.sent_mavlink: list[tuple] = []
+        self.takeoff_calls: list[float] = []
         self.message_factory = type(
             "FakeMessageFactory",
             (),
@@ -46,6 +47,11 @@ class FakeVehicle:
         self.is_armable = True
         self.system_status = type("FakeSystemStatus", (), {"state": "STANDBY"})()
         self.gps_0 = type("FakeGps", (), {"fix_type": 0, "satellites_visible": 0})()
+        self.location = type(
+            "FakeLocation",
+            (),
+            {"global_relative_frame": type("FakeRelativeFrame", (), {"alt": 6.0})()},
+        )()
         self.last_heartbeat = 0.2
         self.flush_called = False
         self.closed = False
@@ -72,6 +78,9 @@ class FakeVehicle:
 
     def send_mavlink(self, command: tuple) -> None:
         self.sent_mavlink.append(command)
+
+    def simple_takeoff(self, altitude: float) -> None:
+        self.takeoff_calls.append(altitude)
 
     def close(self) -> None:
         self.closed = True
@@ -121,6 +130,7 @@ def test_upload_mission_clears_uploads_and_sets_auto_mode() -> None:
     assert calls[0][1]["wait_ready"] is True
     assert vehicle.commands.actions == ["download", "wait_ready", "clear", "add", "add", "upload"]
     assert vehicle.parameters["ARMING_CHECK"] == 0
+    assert vehicle.takeoff_calls == [10.0]
     assert vehicle.mode_history == ["GUIDED", "AUTO"]
     assert vehicle.mode == "AUTO"
     assert vehicle.armed is True
@@ -242,3 +252,36 @@ def test_upload_mission_times_out_when_vehicle_never_arms(capsys: pytest.Capture
     assert "Mission upload failed during arming vehicle" in captured.out
     assert "is_armable=False" in captured.err
     assert "system_status=CRITICAL" in captured.err
+
+
+def test_upload_mission_warns_if_takeoff_altitude_is_not_reached(capsys: pytest.CaptureFixture[str]) -> None:
+    vehicle = FakeVehicle()
+    vehicle.location.global_relative_frame.alt = 0.8
+
+    result = upload_mission(
+        connection_string="tcp:127.0.0.1:5760",
+        mission_waypoints=[
+            {
+                "seq": 0,
+                "frame": 3,
+                "command": 16,
+                "current": 1,
+                "autocontinue": 1,
+                "param1": 0.0,
+                "param2": 2.0,
+                "param3": 0.0,
+                "param4": 0.0,
+                "x_lat": 30.6275,
+                "y_lon": -96.3351,
+                "z_alt": 60.0,
+            }
+        ],
+        connect_callable=lambda *_args, **_kwargs: vehicle,
+        vehicle_mode_factory=lambda mode_name: mode_name,
+        takeoff_timeout_s=0.01,
+    )
+
+    captured = capsys.readouterr()
+    assert "Warning: vehicle did not reach 5.0 meters within 0.0s" in captured.out
+    assert vehicle.takeoff_calls == [10.0]
+    assert result["mode"] == "AUTO"
