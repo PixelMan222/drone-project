@@ -32,13 +32,14 @@
 
     html, body {
       margin: 0;
-      min-height: 100%;
+      min-height: 100vh;
       background:
         radial-gradient(circle at top, rgba(55, 128, 84, 0.16), transparent 38%),
         linear-gradient(180deg, #040807 0%, #07110d 32%, #050908 100%);
       color: var(--text);
       font-family: "Rajdhani", sans-serif;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
 
     body::before,
@@ -146,14 +147,16 @@
       display: grid;
       grid-template-columns: minmax(0, 2.2fr) minmax(320px, 0.95fr);
       gap: 16px;
+      align-items: start;
       min-height: 0;
     }
 
     .map-panel {
       padding: 14px;
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto auto auto auto;
       gap: 12px;
+      align-content: start;
       min-height: 0;
     }
 
@@ -371,7 +374,8 @@
 
     .map-shell {
       position: relative;
-      min-height: 520px;
+      height: clamp(480px, 62vh, 760px);
+      min-height: 480px;
       border: 1px solid rgba(116, 255, 174, 0.16);
       background:
         radial-gradient(circle at center, rgba(116, 255, 174, 0.05), transparent 58%),
@@ -573,8 +577,9 @@
 
     .side-column {
       display: grid;
-      grid-template-rows: auto minmax(230px, 0.95fr) minmax(0, 1.15fr);
+      grid-template-rows: auto minmax(230px, auto) minmax(280px, 1fr);
       gap: 16px;
+      align-content: start;
       min-height: 0;
     }
 
@@ -678,7 +683,7 @@
     .fleet-list,
     .log-list {
       min-height: 0;
-      overflow: hidden;
+      overflow: auto;
     }
 
     .fleet-list {
@@ -906,10 +911,6 @@
     }
 
     @media (max-width: 1100px) {
-      body {
-        overflow: auto;
-      }
-
       .dashboard {
         min-height: auto;
       }
@@ -929,6 +930,7 @@
 
       .map-shell {
         min-height: 420px;
+        height: 420px;
       }
     }
   </style>
@@ -1558,7 +1560,11 @@
         return;
       }
 
-      state.map.fitBounds(L.latLngBounds(points.map(latLngFromPoint)).pad(0.2));
+      state.map.fitBounds(L.latLngBounds(points.map(latLngFromPoint)), {
+        animate: false,
+        maxZoom: 17,
+        padding: [36, 36]
+      });
       syncCenterInputsFromMap();
     }
 
@@ -1749,12 +1755,12 @@
       );
     }
 
-    async function submitGeofence(points, routeMode = state.activeRouteMode) {
+    async function submitGeofence(points, routeMode = state.activeRouteMode, { refocusMap = true } = {}) {
       if (points.length < 3) {
         throw new Error("Place at least three geofence vertices before generating a route.");
       }
 
-      state.shouldRefocusMap = true;
+      state.shouldRefocusMap = refocusMap;
       const payload = await fetchJson("/api/geofence", {
         method: "POST",
         headers: {
@@ -1777,13 +1783,13 @@
       syncRouteButtons(routeMode);
 
       if (state.draftPoints.length >= 3) {
-        await submitGeofence(state.draftPoints, routeMode);
+        await submitGeofence(state.draftPoints, routeMode, { refocusMap: true });
         return;
       }
 
       const existingGeofence = (state.payload && state.payload.geofence) || [];
       if (existingGeofence.length >= 3) {
-        await submitGeofence(existingGeofence, routeMode);
+        await submitGeofence(existingGeofence, routeMode, { refocusMap: false });
         return;
       }
 
@@ -1842,6 +1848,13 @@
       syncCenterInputsFromMap();
       updateDraftControls();
       window.setTimeout(() => state.map.invalidateSize(), 0);
+      window.addEventListener("resize", () => {
+        window.requestAnimationFrame(() => {
+          if (state.map) {
+            state.map.invalidateSize(false);
+          }
+        });
+      });
     }
 
     function connectFleetSocket() {
