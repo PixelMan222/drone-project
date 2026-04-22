@@ -840,6 +840,10 @@
         grid-template-rows: auto auto;
       }
 
+      .connection-form {
+        grid-template-columns: 1fr;
+      }
+
       .map-shell {
         min-height: 420px;
       }
@@ -1034,6 +1038,12 @@
       red: "#ff6767",
       cyan: "#80f4ff"
     };
+    const DEFAULT_CONNECTION_PANEL = {
+      drone_id: null,
+      connection_string: "",
+      status: "disconnected",
+      message: "No MAVLink telemetry link active"
+    };
     const state = {
       activeRouteMode: "perimeter",
       draftClickTimer: null,
@@ -1044,7 +1054,6 @@
       hasInitialView: false,
       layers: null,
       map: null,
-      pendingConnectionString: "",
       payload: null,
       reconnectAttempt: 0,
       routeWaypointMarkers: [],
@@ -1195,6 +1204,33 @@
       undoGeofencePointButton.disabled = draftCount === 0;
       clearGeofenceDraftButton.disabled = draftCount === 0;
       applyGeofenceButton.disabled = !(canApplyDraft || canApplySaved);
+    }
+
+    function formatConnectionStatus(status) {
+      if (status === "connecting") {
+        return "Connecting";
+      }
+      if (status === "connected") {
+        return "Connected";
+      }
+      return "Disconnected";
+    }
+
+    function renderConnectionPanel(panel = null) {
+      const connectionPanel = panel || (state.payload && state.payload.connection_panel) || {
+        ...DEFAULT_CONNECTION_PANEL
+      };
+      const status = connectionPanel.status || "disconnected";
+      connectionStatusBadge.className = `connection-badge connection-status-${status}`;
+      connectionStatusBadge.textContent = formatConnectionStatus(status);
+      connectionStatusText.textContent = connectionPanel.connection_string || "No telemetry link active";
+      connectionDroneId.textContent = `Drone ID: ${connectionPanel.drone_id || "--"}`;
+      connectionStatusMeta.textContent = connectionPanel.message || "Awaiting MAVLink connection string";
+      connectDroneButton.disabled = status === "connecting";
+
+      if (!connectionStringInput.matches(":focus") && connectionPanel.connection_string) {
+        connectionStringInput.value = connectionPanel.connection_string;
+      }
     }
 
     function refreshGeofenceCount() {
@@ -1450,6 +1486,7 @@
       renderOperationalLayers(payload);
       renderFleet(payload.drones || []);
       renderLog(payload.event_log || []);
+      renderConnectionPanel(payload.connection_panel);
       updateHeader(payload);
       updateDraftControls();
       syncDroneMarkers(payload.drones || [], payload.dock_position);
@@ -1546,6 +1583,31 @@
         body: JSON.stringify(center)
       }));
       setAlertBanner("Map center updated", `${center.latitude.toFixed(5)}, ${center.longitude.toFixed(5)} | zoom ${center.zoom}`);
+    }
+
+    async function connectTelemetryLink() {
+      const connectionString = connectionStringInput.value.trim();
+      if (!connectionString) {
+        throw new Error("Enter a MAVLink connection string before connecting.");
+      }
+
+      renderConnectionPanel({
+        drone_id: null,
+        connection_string: connectionString,
+        status: "connecting",
+        message: "Request accepted - waiting for telemetry"
+      });
+      applyFleetPayload(await fetchJson("/api/connect", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          connection_string: connectionString
+        })
+      }));
+      setAlertBanner("Telemetry link requested", connectionString);
     }
 
     async function submitGeofence(points, routeMode = state.activeRouteMode) {
@@ -1695,6 +1757,26 @@
         });
     });
 
+    connectDroneButton.addEventListener("click", () => {
+      connectTelemetryLink().catch((error) => {
+        renderConnectionPanel({
+          drone_id: null,
+          connection_string: connectionStringInput.value.trim(),
+          status: "disconnected",
+          message: error.message
+        });
+        setAlertBanner("Telemetry link failed", error.message);
+      });
+    });
+
+    connectionStringInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      connectDroneButton.click();
+    });
+
     useBrowserLocationButton.addEventListener("click", () => {
       if (!navigator.geolocation) {
         setAlertBanner("Browser location unavailable", "This browser does not expose geolocation.");
@@ -1749,6 +1831,7 @@
     });
 
     initializeMap();
+    renderConnectionPanel(DEFAULT_CONNECTION_PANEL);
     startClock();
     loadFleetState()
       .catch((error) => {

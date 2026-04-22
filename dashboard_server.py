@@ -122,10 +122,12 @@ def generate_drone_id() -> str:
     global next_drone_number
 
     with state_lock:
+        existing_ids = {link.drone_id for link in telemetry_links.values()}
+        existing_ids.update(drone.drone_id for drone in fleet_manager.snapshot())
         while True:
             candidate = f"drone-{next_drone_number:02d}"
             next_drone_number += 1
-            if candidate not in telemetry_links:
+            if candidate not in existing_ids:
                 return candidate
 
 
