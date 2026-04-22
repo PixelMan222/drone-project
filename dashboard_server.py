@@ -23,6 +23,7 @@ from drone_patrol.patrol_routes import (
     generate_grid_survey_route,
     generate_perimeter_patrol_route,
 )
+from drone_patrol.mission_uploader import upload_mission
 from drone_patrol.telemetry_receiver import DroneTelemetryReceiver
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -60,6 +61,7 @@ state_lock = Lock()
 telemetry_receivers: dict[str, DroneTelemetryReceiver] = {}
 telemetry_links: dict[str, TelemetryLink] = {}
 telemetry_receiver_factory = DroneTelemetryReceiver
+mission_uploader_callable = upload_mission
 next_drone_number = 1
 server_state: dict[str, Any] = {
     "geofence": [],
@@ -166,6 +168,12 @@ def refresh_telemetry_links(drones: list[DroneState]) -> list[dict[str, Any]]:
                 link.status = "connecting"
                 link.message = "Awaiting first telemetry frame"
         return [serialize_telemetry_link(link) for link in ordered_links]
+
+
+def get_connection_string_for_drone(drone_id: str) -> str | None:
+    with state_lock:
+        link = telemetry_links.get(drone_id)
+        return link.connection_string if link is not None else None
 
 
 def build_payload() -> dict[str, Any]:
@@ -434,6 +442,48 @@ def create_app() -> tuple[Any, Any]:
             meta=connection_string,
         )
         return jsonify(build_payload()), 202
+
+    @app.post("/api/upload-mission")
+    def api_upload_mission() -> Any:
+        payload = request.get_json(silent=True) or {}
+        drone_id = str(payload.get("drone_id", "")).strip()
+        if not drone_id:
+            return jsonify({"error": "drone_id is required."}), 400
+
+        with state_lock:
+            mission_waypoints = [dict(item) for item in server_state["patrol_route"]]
+
+        if not mission_waypoints:
+            return jsonify({"error": "No active patrol route is available. Draw a geofence first."}), 400
+
+        connection_string = get_connection_string_for_drone(drone_id)
+        if not connection_string:
+            return jsonify({"error": f"No telemetry link is registered for drone '{drone_id}'."}), 404
+
+        try:
+            upload_result = mission_uploader_callable(
+                connection_string=connection_string,
+                mission_waypoints=mission_waypoints,
+            )
+        except Exception as exc:
+            append_event(
+                f"Mission upload failed for {drone_id}",
+                level="critical",
+                meta=str(exc),
+            )
+            return jsonify({"error": str(exc), "payload": build_payload()}), 500
+
+        append_event(
+            f"Mission uploaded to {drone_id}",
+            level="info",
+            meta=f"{upload_result['uploaded_waypoints']} waypoints | AUTO mode armed",
+        )
+        return jsonify(
+            {
+                "upload_result": upload_result,
+                "payload": build_payload(),
+            }
+        )
 
     @socketio.on("connect")
     def on_connect() -> None:

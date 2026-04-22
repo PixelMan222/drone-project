@@ -193,6 +193,89 @@
       margin-top: 12px;
     }
 
+    .draw-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      padding: 12px 14px;
+      border: 1px solid rgba(117, 255, 176, 0.18);
+      background:
+        linear-gradient(90deg, rgba(12, 30, 24, 0.96), rgba(8, 20, 16, 0.92)),
+        linear-gradient(180deg, rgba(255, 190, 85, 0.04), transparent);
+      box-shadow: inset 0 0 16px rgba(116, 255, 174, 0.05), 0 0 22px rgba(116, 255, 174, 0.06);
+    }
+
+    .draw-controls-copy {
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.76rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      flex: 1 1 220px;
+    }
+
+    .draw-controls-actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .draw-primary-button,
+    .draw-secondary-button {
+      min-width: 164px;
+      padding: 11px 16px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      font-family: "Share Tech Mono", monospace;
+    }
+
+    .draw-primary-button {
+      border: 1px solid rgba(116, 255, 174, 0.42);
+      background: rgba(14, 39, 30, 0.98);
+      color: var(--green);
+      box-shadow: inset 0 0 12px rgba(116, 255, 174, 0.08), 0 0 14px rgba(116, 255, 174, 0.12);
+    }
+
+    .draw-primary-button.active {
+      background: rgba(17, 48, 37, 1);
+      color: #e4ffe8;
+      border-color: rgba(116, 255, 174, 0.72);
+      box-shadow: inset 0 0 20px rgba(116, 255, 174, 0.16), 0 0 18px rgba(116, 255, 174, 0.16);
+    }
+
+    .draw-secondary-button {
+      border: 1px solid rgba(255, 103, 103, 0.34);
+      background: rgba(31, 13, 13, 0.9);
+      color: #ffb0b0;
+    }
+
+    .draw-secondary-button:hover {
+      color: #ffd3d3;
+      border-color: rgba(255, 103, 103, 0.5);
+    }
+
+    .upload-mission-button {
+      min-width: 176px;
+      padding: 11px 16px;
+      border: 1px solid rgba(255, 190, 85, 0.44);
+      background: rgba(43, 28, 9, 0.92);
+      color: var(--amber);
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      font-family: "Share Tech Mono", monospace;
+      box-shadow: inset 0 0 14px rgba(255, 190, 85, 0.08), 0 0 14px rgba(255, 190, 85, 0.08);
+    }
+
+    .upload-mission-button.hidden {
+      display: none;
+    }
+
     .route-mode-button {
       border: 1px solid rgba(255, 190, 85, 0.28);
       background: rgba(9, 21, 17, 0.82);
@@ -894,6 +977,15 @@
           </div>
         </div>
 
+        <div class="draw-controls">
+          <div class="draw-controls-actions">
+            <button id="draw-geofence-primary" class="action-button draw-primary-button" type="button">Draw Geofence</button>
+            <button id="draw-geofence-clear" class="action-button draw-secondary-button" type="button">Clear</button>
+            <button id="upload-mission" class="action-button upload-mission-button hidden" type="button">Upload Mission</button>
+          </div>
+          <div class="draw-controls-copy">Click to place vertices. Double-click closes the polygon and generates the patrol route.</div>
+        </div>
+
         <div class="map-shell">
           <div class="map-toolbar">
             <label class="map-input-group">Lat
@@ -1007,6 +1099,9 @@
     const geofenceCount = document.getElementById("geofence-count");
     const routeLabel = document.getElementById("route-label");
     const routeModeButtons = Array.from(document.querySelectorAll("[data-route-mode]"));
+    const drawGeofencePrimaryButton = document.getElementById("draw-geofence-primary");
+    const drawGeofenceClearButton = document.getElementById("draw-geofence-clear");
+    const uploadMissionButton = document.getElementById("upload-mission");
     const connectionStringInput = document.getElementById("connection-string");
     const connectDroneButton = document.getElementById("connect-drone");
     const connectionStatusBadge = document.getElementById("connection-status-badge");
@@ -1201,9 +1296,14 @@
       const savedCount = ((state.payload && state.payload.geofence) || []).length;
       const canApplyDraft = draftCount >= 3;
       const canApplySaved = draftCount === 0 && savedCount >= 3;
+      const hasRoute = ((state.payload && state.payload.patrol_route) || []).length >= 2;
+      const connectedDroneId = state.payload && state.payload.connection_panel ? state.payload.connection_panel.drone_id : null;
       undoGeofencePointButton.disabled = draftCount === 0;
       clearGeofenceDraftButton.disabled = draftCount === 0;
       applyGeofenceButton.disabled = !(canApplyDraft || canApplySaved);
+      drawGeofenceClearButton.disabled = draftCount === 0;
+      uploadMissionButton.classList.toggle("hidden", !hasRoute);
+      uploadMissionButton.disabled = !hasRoute || !connectedDroneId;
     }
 
     function formatConnectionStatus(status) {
@@ -1496,7 +1596,9 @@
     function setDrawMode(enabled) {
       state.drawMode = enabled;
       toggleDrawModeButton.classList.toggle("active", enabled);
+      drawGeofencePrimaryButton.classList.toggle("active", enabled);
       toggleDrawModeButton.textContent = enabled ? "Drawing Active" : "Draw Geofence";
+      drawGeofencePrimaryButton.textContent = enabled ? "Drawing Active" : "Draw Geofence";
       state.map.getContainer().style.cursor = enabled ? "crosshair" : "";
       if (enabled) {
         state.map.doubleClickZoom.disable();
@@ -1608,6 +1710,43 @@
         })
       }));
       setAlertBanner("Telemetry link requested", connectionString);
+    }
+
+    async function uploadMissionToConnectedDrone() {
+      const connectionPanel = (state.payload && state.payload.connection_panel) || DEFAULT_CONNECTION_PANEL;
+      if (!connectionPanel.drone_id) {
+        throw new Error("Connect a drone before uploading a mission.");
+      }
+      if (!state.payload || !state.payload.patrol_route || state.payload.patrol_route.length < 2) {
+        throw new Error("Generate a patrol route before uploading a mission.");
+      }
+
+      const response = await fetch("/api/upload-mission", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          drone_id: connectionPanel.drone_id
+        })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (payload.payload) {
+          applyFleetPayload(payload.payload);
+        }
+        throw new Error(payload.error || `Mission upload failed with status ${response.status}`);
+      }
+
+      if (payload.payload) {
+        applyFleetPayload(payload.payload);
+      }
+      const uploadResult = payload.upload_result || {};
+      setAlertBanner(
+        "Mission upload complete",
+        `${connectionPanel.drone_id} | ${uploadResult.uploaded_waypoints || 0} waypoints | ${uploadResult.mode || "AUTO"}`
+      );
     }
 
     async function submitGeofence(points, routeMode = state.activeRouteMode) {
@@ -1804,6 +1943,22 @@
 
     toggleDrawModeButton.addEventListener("click", () => {
       setDrawMode(!state.drawMode);
+    });
+
+    drawGeofencePrimaryButton.addEventListener("click", () => {
+      setDrawMode(!state.drawMode);
+    });
+
+    drawGeofenceClearButton.addEventListener("click", () => {
+      clearDraftGeofence();
+      setDrawMode(false);
+      setAlertBanner("Draft cleared", "Geofence drawing reset. Click Draw Geofence to start again.");
+    });
+
+    uploadMissionButton.addEventListener("click", () => {
+      uploadMissionToConnectedDrone().catch((error) => {
+        setAlertBanner("Mission upload failed", error.message);
+      });
     });
 
     undoGeofencePointButton.addEventListener("click", () => {

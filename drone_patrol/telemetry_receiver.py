@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import collections
+import collections.abc
 from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event, Thread
 from typing import Any
+
+collections.MutableMapping = collections.abc.MutableMapping
+collections.MutableSequence = collections.abc.MutableSequence
 
 from .fleet_state import DroneState, DroneStatus, FleetStateManager, GPSPosition, utcnow
 

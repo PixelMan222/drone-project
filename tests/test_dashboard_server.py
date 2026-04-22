@@ -10,6 +10,7 @@ from drone_patrol.fleet_state import DroneStatus
 @contextmanager
 def reset_dashboard_state() -> Iterator[None]:
     original_factory = dashboard_server.telemetry_receiver_factory
+    original_mission_uploader = dashboard_server.mission_uploader_callable
     with dashboard_server.state_lock:
         dashboard_server.server_state["geofence"] = []
         dashboard_server.server_state["dock_position"] = None
@@ -27,6 +28,7 @@ def reset_dashboard_state() -> Iterator[None]:
         yield
     finally:
         dashboard_server.telemetry_receiver_factory = original_factory
+        dashboard_server.mission_uploader_callable = original_mission_uploader
         with dashboard_server.state_lock:
             dashboard_server.server_state["geofence"] = []
             dashboard_server.server_state["dock_position"] = None
@@ -179,3 +181,90 @@ def test_api_connect_requires_connection_string() -> None:
         assert response.status_code == 400
         payload = response.get_json()
         assert "connection_string" in payload["error"]
+
+
+def test_api_upload_mission_uses_active_route_and_connected_drone() -> None:
+    with reset_dashboard_state():
+        uploaded_calls = []
+
+        def fake_mission_uploader(*, connection_string, mission_waypoints):
+            uploaded_calls.append(
+                {
+                    "connection_string": connection_string,
+                    "mission_waypoints": mission_waypoints,
+                }
+            )
+            return {
+                "connection_string": connection_string,
+                "uploaded_waypoints": len(mission_waypoints),
+                "mode": "AUTO",
+            }
+
+        dashboard_server.mission_uploader_callable = fake_mission_uploader
+        with dashboard_server.state_lock:
+            dashboard_server.server_state["patrol_route"] = [
+                {
+                    "seq": 0,
+                    "frame": 3,
+                    "command": 16,
+                    "current": 1,
+                    "autocontinue": 1,
+                    "param1": 0.0,
+                    "param2": 2.0,
+                    "param3": 0.0,
+                    "param4": 0.0,
+                    "x_lat": 30.6275,
+                    "y_lon": -96.3351,
+                    "z_alt": 60.0,
+                },
+                {
+                    "seq": 1,
+                    "frame": 3,
+                    "command": 16,
+                    "current": 0,
+                    "autocontinue": 1,
+                    "param1": 0.0,
+                    "param2": 2.0,
+                    "param3": 0.0,
+                    "param4": 0.0,
+                    "x_lat": 30.6284,
+                    "y_lon": -96.3339,
+                    "z_alt": 60.0,
+                },
+            ]
+            dashboard_server.telemetry_links["drone-01"] = dashboard_server.TelemetryLink(
+                drone_id="drone-01",
+                connection_string="tcp:127.0.0.1:5760",
+                requested_at=dashboard_server.datetime.now(dashboard_server.timezone.utc),
+                status="connected",
+                message="AUTO",
+            )
+
+        client = dashboard_server.app.test_client()
+        response = client.post("/api/upload-mission", json={"drone_id": "drone-01"})
+
+        assert response.status_code == 200
+        assert uploaded_calls[0]["connection_string"] == "tcp:127.0.0.1:5760"
+        assert len(uploaded_calls[0]["mission_waypoints"]) == 2
+        payload = response.get_json()
+        assert payload["upload_result"]["uploaded_waypoints"] == 2
+        assert any(entry["text"] == "Mission uploaded to drone-01" for entry in payload["payload"]["event_log"])
+
+
+def test_api_upload_mission_requires_active_route() -> None:
+    with reset_dashboard_state():
+        with dashboard_server.state_lock:
+            dashboard_server.telemetry_links["drone-01"] = dashboard_server.TelemetryLink(
+                drone_id="drone-01",
+                connection_string="udp:127.0.0.1:14550",
+                requested_at=dashboard_server.datetime.now(dashboard_server.timezone.utc),
+                status="connected",
+                message="AUTO",
+            )
+        client = dashboard_server.app.test_client()
+
+        response = client.post("/api/upload-mission", json={"drone_id": "drone-01"})
+
+        assert response.status_code == 400
+        payload = response.get_json()
+        assert "No active patrol route" in payload["error"]
