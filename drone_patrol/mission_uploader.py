@@ -3,6 +3,7 @@ from __future__ import annotations
 import collections
 import collections.abc
 import traceback
+from time import monotonic, sleep
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -12,7 +13,7 @@ collections.MutableSequence = collections.abc.MutableSequence
 from .patrol_routes import MAVLinkMissionWaypoint
 
 VehicleConnector = Callable[..., Any]
-CommandFactory = Callable[..., Any]
+MissionItemIntFactory = Callable[..., Any]
 VehicleModeFactory = Callable[[str], Any]
 
 
@@ -30,8 +31,10 @@ def upload_mission(
     baud: int = 57600,
     connect_timeout_s: float = 30.0,
     wait_ready: bool = True,
+    mode_change_timeout_s: float = 10.0,
+    arm_timeout_s: float = 10.0,
     connect_callable: VehicleConnector | None = None,
-    command_factory: CommandFactory | None = None,
+    mission_item_int_factory: MissionItemIntFactory | None = None,
     vehicle_mode_factory: VehicleModeFactory | None = None,
     connect_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -39,7 +42,6 @@ def upload_mission(
         raise ValueError("mission_waypoints must contain at least one waypoint.")
 
     connect_callable = connect_callable or _default_connect
-    command_factory = command_factory or _default_command_factory
     vehicle_mode_factory = vehicle_mode_factory or _default_vehicle_mode_factory
 
     connect_options = {
@@ -61,6 +63,7 @@ def upload_mission(
         commands = getattr(vehicle, "commands", None)
         if commands is None:
             raise RuntimeError("Connected vehicle does not expose a mission command interface.")
+        item_factory = mission_item_int_factory or _default_mission_item_int_factory(vehicle)
 
         download_method = getattr(commands, "download", None)
         wait_ready_method = getattr(commands, "wait_ready", None)
@@ -86,7 +89,7 @@ def upload_mission(
                 if not callable(add_method):
                     raise RuntimeError("Connected vehicle does not support mission upload.")
                 add_method(
-                    command_factory(
+                    item_factory(
                         0,
                         0,
                         waypoint.seq,
@@ -98,8 +101,8 @@ def upload_mission(
                         waypoint.param2,
                         waypoint.param3,
                         waypoint.param4,
-                        waypoint.x_lat,
-                        waypoint.y_lon,
+                        int(round(float(waypoint.x_lat) * 1e7)),
+                        int(round(float(waypoint.y_lon) * 1e7)),
                         waypoint.z_alt,
                     )
                 )
@@ -114,10 +117,20 @@ def upload_mission(
             raise MissionUploadError("uploading waypoints", exc) from exc
 
         try:
-            vehicle.mode = vehicle_mode_factory("AUTO")
+            print("[mission_uploader] Arming vehicle after mission upload")
+            vehicle.armed = True
             flush_method = getattr(vehicle, "flush", None)
             if callable(flush_method):
                 flush_method()
+            if not _wait_for_condition(lambda: bool(getattr(vehicle, "armed", False)), arm_timeout_s):
+                raise RuntimeError("Vehicle did not report armed state after upload.")
+
+            vehicle.mode = vehicle_mode_factory("AUTO")
+            if callable(flush_method):
+                flush_method()
+            if not _wait_for_condition(lambda: _vehicle_mode_name(vehicle) == "AUTO", mode_change_timeout_s):
+                raise RuntimeError(f"Vehicle mode remained {_vehicle_mode_name(vehicle)!r} instead of 'AUTO'.")
+            print(f"[mission_uploader] Vehicle armed={getattr(vehicle, 'armed', None)} mode={_vehicle_mode_name(vehicle)}")
         except Exception as exc:
             _log_upload_exception("setting AUTO mode", exc)
             raise MissionUploadError("setting AUTO mode", exc) from exc
@@ -125,7 +138,8 @@ def upload_mission(
         return {
             "connection_string": connection_string,
             "uploaded_waypoints": uploaded_count,
-            "mode": "AUTO",
+            "mode": _vehicle_mode_name(vehicle),
+            "armed": bool(getattr(vehicle, "armed", False)),
         }
     finally:
         close_method = getattr(vehicle, "close", None)
@@ -148,14 +162,12 @@ def _default_connect(connection_string: str, **kwargs: Any) -> Any:
     return connect(connection_string, **kwargs)
 
 
-def _default_command_factory(*args: Any) -> Any:
-    try:
-        from dronekit import Command
-    except ImportError as exc:
-        raise ImportError(
-            "DroneKit is required for mission upload commands. Install it with `pip install dronekit`."
-        ) from exc
-    return Command(*args)
+def _default_mission_item_int_factory(vehicle: Any) -> MissionItemIntFactory:
+    message_factory = getattr(vehicle, "message_factory", None)
+    encoder = getattr(message_factory, "mission_item_int_encode", None) if message_factory is not None else None
+    if not callable(encoder):
+        raise RuntimeError("Connected vehicle does not expose mission_item_int_encode for mission upload.")
+    return encoder
 
 
 def _default_vehicle_mode_factory(mode_name: str) -> Any:
@@ -166,3 +178,19 @@ def _default_vehicle_mode_factory(mode_name: str) -> Any:
             "DroneKit is required for mission upload mode changes. Install it with `pip install dronekit`."
         ) from exc
     return VehicleMode(mode_name)
+
+
+def _vehicle_mode_name(vehicle: Any) -> str | None:
+    mode = getattr(vehicle, "mode", None)
+    if mode is None:
+        return None
+    return getattr(mode, "name", mode)
+
+
+def _wait_for_condition(predicate: Callable[[], bool], timeout_s: float, poll_interval_s: float = 0.2) -> bool:
+    deadline = monotonic() + timeout_s
+    while monotonic() < deadline:
+        if predicate():
+            return True
+        sleep(poll_interval_s)
+    return predicate()

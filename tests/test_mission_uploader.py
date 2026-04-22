@@ -30,7 +30,13 @@ class FakeCommands:
 class FakeVehicle:
     def __init__(self) -> None:
         self.commands = FakeCommands()
+        self.message_factory = type(
+            "FakeMessageFactory",
+            (),
+            {"mission_item_int_encode": staticmethod(lambda *args: args)},
+        )()
         self.mode = None
+        self.armed = False
         self.flush_called = False
         self.closed = False
 
@@ -78,18 +84,21 @@ def test_upload_mission_clears_uploads_and_sets_auto_mode() -> None:
             },
         ],
         connect_callable=lambda connection_string, **kwargs: calls.append((connection_string, kwargs)) or vehicle,
-        command_factory=lambda *args: args,
-        vehicle_mode_factory=lambda mode_name: f"MODE:{mode_name}",
+        vehicle_mode_factory=lambda mode_name: mode_name,
     )
 
     assert calls[0][0] == "tcp:127.0.0.1:5760"
     assert calls[0][1]["wait_ready"] is True
     assert vehicle.commands.actions == ["download", "wait_ready", "clear", "add", "add", "upload"]
-    assert vehicle.mode == "MODE:AUTO"
+    assert vehicle.mode == "AUTO"
+    assert vehicle.armed is True
     assert vehicle.flush_called is True
     assert vehicle.closed is True
     assert result["uploaded_waypoints"] == 2
     assert result["mode"] == "AUTO"
+    assert result["armed"] is True
+    assert vehicle.commands.added[0][11] == 306275000
+    assert vehicle.commands.added[0][12] == -963351000
 
 
 def test_upload_mission_requires_waypoints() -> None:
@@ -125,10 +134,37 @@ def test_upload_mission_logs_traceback_and_step_on_failure(capsys: pytest.Captur
                 }
             ],
             connect_callable=lambda *_args, **_kwargs: vehicle,
-            command_factory=lambda *args: args,
-            vehicle_mode_factory=lambda mode_name: f"MODE:{mode_name}",
+            vehicle_mode_factory=lambda mode_name: mode_name,
         )
 
     captured = capsys.readouterr()
     assert "Mission upload failed during clearing mission" in captured.out
     assert "RuntimeError: clear link timeout" in captured.err
+
+
+def test_upload_mission_requires_auto_mode_confirmation() -> None:
+    vehicle = FakeVehicle()
+
+    with pytest.raises(MissionUploadError, match="setting AUTO mode"):
+        upload_mission(
+            connection_string="tcp:127.0.0.1:5760",
+            mission_waypoints=[
+                {
+                    "seq": 0,
+                    "frame": 3,
+                    "command": 16,
+                    "current": 1,
+                    "autocontinue": 1,
+                    "param1": 0.0,
+                    "param2": 2.0,
+                    "param3": 0.0,
+                    "param4": 0.0,
+                    "x_lat": 30.6275,
+                    "y_lon": -96.3351,
+                    "z_alt": 60.0,
+                }
+            ],
+            connect_callable=lambda *_args, **_kwargs: vehicle,
+            vehicle_mode_factory=lambda mode_name: "MODE:GUIDED",
+            mode_change_timeout_s=0.01,
+        )
