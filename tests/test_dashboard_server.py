@@ -268,3 +268,45 @@ def test_api_upload_mission_requires_active_route() -> None:
         assert response.status_code == 400
         payload = response.get_json()
         assert "No active patrol route" in payload["error"]
+
+
+def test_api_upload_mission_returns_actual_failure_message_in_event_log() -> None:
+    with reset_dashboard_state():
+        def fail_mission_uploader(*, connection_string, mission_waypoints):
+            raise RuntimeError("Mission upload failed during setting AUTO mode: mode change rejected")
+
+        dashboard_server.mission_uploader_callable = fail_mission_uploader
+        with dashboard_server.state_lock:
+            dashboard_server.server_state["patrol_route"] = [
+                {
+                    "seq": 0,
+                    "frame": 3,
+                    "command": 16,
+                    "current": 1,
+                    "autocontinue": 1,
+                    "param1": 0.0,
+                    "param2": 2.0,
+                    "param3": 0.0,
+                    "param4": 0.0,
+                    "x_lat": 30.6275,
+                    "y_lon": -96.3351,
+                    "z_alt": 60.0,
+                }
+            ]
+            dashboard_server.telemetry_links["drone-01"] = dashboard_server.TelemetryLink(
+                drone_id="drone-01",
+                connection_string="tcp:127.0.0.1:5760",
+                requested_at=dashboard_server.datetime.now(dashboard_server.timezone.utc),
+                status="connected",
+                message="AUTO",
+            )
+
+        client = dashboard_server.app.test_client()
+        response = client.post("/api/upload-mission", json={"drone_id": "drone-01"})
+
+        assert response.status_code == 500
+        payload = response.get_json()
+        assert "setting AUTO mode" in payload["error"]
+        assert payload["payload"]["event_log"][0]["text"] == (
+            "Mission upload failed for drone-01: Mission upload failed during setting AUTO mode: mode change rejected"
+        )

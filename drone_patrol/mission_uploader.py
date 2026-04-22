@@ -1,13 +1,26 @@
 from __future__ import annotations
 
+import collections
+import collections.abc
+import traceback
 from collections.abc import Callable, Sequence
 from typing import Any
+
+collections.MutableMapping = collections.abc.MutableMapping
+collections.MutableSequence = collections.abc.MutableSequence
 
 from .patrol_routes import MAVLinkMissionWaypoint
 
 VehicleConnector = Callable[..., Any]
 CommandFactory = Callable[..., Any]
 VehicleModeFactory = Callable[[str], Any]
+
+
+class MissionUploadError(RuntimeError):
+    def __init__(self, step: str, original_error: Exception) -> None:
+        self.step = step
+        self.original_error = original_error
+        super().__init__(f"Mission upload failed during {step}: {original_error}")
 
 
 def upload_mission(
@@ -38,7 +51,12 @@ def upload_mission(
     if baud:
         connect_options.setdefault("baud", baud)
 
-    vehicle = connect_callable(connection_string, **connect_options)
+    try:
+        vehicle = connect_callable(connection_string, **connect_options)
+    except Exception as exc:
+        _log_upload_exception("connecting to drone", exc)
+        raise MissionUploadError("connecting to drone", exc) from exc
+
     try:
         commands = getattr(vehicle, "commands", None)
         if commands is None:
@@ -54,43 +72,55 @@ def upload_mission(
         clear_method = getattr(commands, "clear", None)
         if not callable(clear_method):
             raise RuntimeError("Connected vehicle does not support mission clearing.")
-        clear_method()
+        try:
+            clear_method()
+        except Exception as exc:
+            _log_upload_exception("clearing mission", exc)
+            raise MissionUploadError("clearing mission", exc) from exc
 
         uploaded_count = 0
-        for item in mission_waypoints:
-            waypoint = MAVLinkMissionWaypoint.model_validate(item)
-            add_method = getattr(commands, "add", None)
-            if not callable(add_method):
-                raise RuntimeError("Connected vehicle does not support mission upload.")
-            add_method(
-                command_factory(
-                    0,
-                    0,
-                    waypoint.seq,
-                    waypoint.frame,
-                    waypoint.command,
-                    waypoint.current,
-                    waypoint.autocontinue,
-                    waypoint.param1,
-                    waypoint.param2,
-                    waypoint.param3,
-                    waypoint.param4,
-                    waypoint.x_lat,
-                    waypoint.y_lon,
-                    waypoint.z_alt,
+        try:
+            for item in mission_waypoints:
+                waypoint = MAVLinkMissionWaypoint.model_validate(item)
+                add_method = getattr(commands, "add", None)
+                if not callable(add_method):
+                    raise RuntimeError("Connected vehicle does not support mission upload.")
+                add_method(
+                    command_factory(
+                        0,
+                        0,
+                        waypoint.seq,
+                        waypoint.frame,
+                        waypoint.command,
+                        waypoint.current,
+                        waypoint.autocontinue,
+                        waypoint.param1,
+                        waypoint.param2,
+                        waypoint.param3,
+                        waypoint.param4,
+                        waypoint.x_lat,
+                        waypoint.y_lon,
+                        waypoint.z_alt,
+                    )
                 )
-            )
-            uploaded_count += 1
+                uploaded_count += 1
 
-        upload_method = getattr(commands, "upload", None)
-        if not callable(upload_method):
-            raise RuntimeError("Connected vehicle does not support mission upload finalization.")
-        upload_method()
+            upload_method = getattr(commands, "upload", None)
+            if not callable(upload_method):
+                raise RuntimeError("Connected vehicle does not support mission upload finalization.")
+            upload_method()
+        except Exception as exc:
+            _log_upload_exception("uploading waypoints", exc)
+            raise MissionUploadError("uploading waypoints", exc) from exc
 
-        vehicle.mode = vehicle_mode_factory("AUTO")
-        flush_method = getattr(vehicle, "flush", None)
-        if callable(flush_method):
-            flush_method()
+        try:
+            vehicle.mode = vehicle_mode_factory("AUTO")
+            flush_method = getattr(vehicle, "flush", None)
+            if callable(flush_method):
+                flush_method()
+        except Exception as exc:
+            _log_upload_exception("setting AUTO mode", exc)
+            raise MissionUploadError("setting AUTO mode", exc) from exc
 
         return {
             "connection_string": connection_string,
@@ -101,6 +131,11 @@ def upload_mission(
         close_method = getattr(vehicle, "close", None)
         if callable(close_method):
             close_method()
+
+
+def _log_upload_exception(step: str, exc: Exception) -> None:
+    print(f"[mission_uploader] Mission upload failed during {step}: {exc}")
+    traceback.print_exc()
 
 
 def _default_connect(connection_string: str, **kwargs: Any) -> Any:

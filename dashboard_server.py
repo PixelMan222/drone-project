@@ -448,17 +448,23 @@ def create_app() -> tuple[Any, Any]:
         payload = request.get_json(silent=True) or {}
         drone_id = str(payload.get("drone_id", "")).strip()
         if not drone_id:
-            return jsonify({"error": "drone_id is required."}), 400
+            message = "drone_id is required."
+            append_event(message, level="critical", meta="Mission upload request rejected")
+            return jsonify({"error": message, "payload": build_payload()}), 400
 
         with state_lock:
             mission_waypoints = [dict(item) for item in server_state["patrol_route"]]
 
         if not mission_waypoints:
-            return jsonify({"error": "No active patrol route is available. Draw a geofence first."}), 400
+            message = "No active patrol route is available. Draw a geofence first."
+            append_event(message, level="critical", meta=f"Mission upload blocked for {drone_id}")
+            return jsonify({"error": message, "payload": build_payload()}), 400
 
         connection_string = get_connection_string_for_drone(drone_id)
         if not connection_string:
-            return jsonify({"error": f"No telemetry link is registered for drone '{drone_id}'."}), 404
+            message = f"No telemetry link is registered for drone '{drone_id}'."
+            append_event(message, level="critical", meta="Mission upload blocked")
+            return jsonify({"error": message, "payload": build_payload()}), 404
 
         try:
             upload_result = mission_uploader_callable(
@@ -466,12 +472,13 @@ def create_app() -> tuple[Any, Any]:
                 mission_waypoints=mission_waypoints,
             )
         except Exception as exc:
+            error_message = str(exc)
             append_event(
-                f"Mission upload failed for {drone_id}",
+                f"Mission upload failed for {drone_id}: {error_message}",
                 level="critical",
-                meta=str(exc),
+                meta=connection_string,
             )
-            return jsonify({"error": str(exc), "payload": build_payload()}), 500
+            return jsonify({"error": error_message, "payload": build_payload()}), 500
 
         append_event(
             f"Mission uploaded to {drone_id}",

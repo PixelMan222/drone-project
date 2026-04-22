@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from drone_patrol.mission_uploader import upload_mission
+from drone_patrol.mission_uploader import MissionUploadError, upload_mission
 
 
 class FakeCommands:
@@ -95,3 +95,40 @@ def test_upload_mission_clears_uploads_and_sets_auto_mode() -> None:
 def test_upload_mission_requires_waypoints() -> None:
     with pytest.raises(ValueError, match="at least one waypoint"):
         upload_mission(connection_string="udp:127.0.0.1:14550", mission_waypoints=[])
+
+
+def test_upload_mission_logs_traceback_and_step_on_failure(capsys: pytest.CaptureFixture[str]) -> None:
+    vehicle = FakeVehicle()
+
+    def fail_clear() -> None:
+        raise RuntimeError("clear link timeout")
+
+    vehicle.commands.clear = fail_clear  # type: ignore[method-assign]
+
+    with pytest.raises(MissionUploadError, match="clearing mission"):
+        upload_mission(
+            connection_string="tcp:127.0.0.1:5760",
+            mission_waypoints=[
+                {
+                    "seq": 0,
+                    "frame": 3,
+                    "command": 16,
+                    "current": 1,
+                    "autocontinue": 1,
+                    "param1": 0.0,
+                    "param2": 2.0,
+                    "param3": 0.0,
+                    "param4": 0.0,
+                    "x_lat": 30.6275,
+                    "y_lon": -96.3351,
+                    "z_alt": 60.0,
+                }
+            ],
+            connect_callable=lambda *_args, **_kwargs: vehicle,
+            command_factory=lambda *args: args,
+            vehicle_mode_factory=lambda mode_name: f"MODE:{mode_name}",
+        )
+
+    captured = capsys.readouterr()
+    assert "Mission upload failed during clearing mission" in captured.out
+    assert "RuntimeError: clear link timeout" in captured.err
