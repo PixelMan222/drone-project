@@ -10,7 +10,7 @@ from typing import Any
 collections.MutableMapping = collections.abc.MutableMapping
 collections.MutableSequence = collections.abc.MutableSequence
 
-from .patrol_routes import MAVLinkMissionWaypoint
+from .patrol_routes import MAVLinkMissionWaypoint, append_loop_jump_to_mission
 
 VehicleConnector = Callable[..., Any]
 MissionItemIntFactory = Callable[..., Any]
@@ -36,6 +36,8 @@ def upload_mission(
     takeoff_altitude_m: float = 10.0,
     takeoff_confirm_altitude_m: float = 5.0,
     takeoff_timeout_s: float = 10.0,
+    loop_mission: bool = True,
+    loop_to_seq: int = 1,
     connect_callable: VehicleConnector | None = None,
     mission_item_int_factory: MissionItemIntFactory | None = None,
     vehicle_mode_factory: VehicleModeFactory | None = None,
@@ -67,6 +69,11 @@ def upload_mission(
         if commands is None:
             raise RuntimeError("Connected vehicle does not expose a mission command interface.")
         item_factory = mission_item_int_factory or _default_mission_item_int_factory(vehicle)
+        mission_items_to_upload = (
+            append_loop_jump_to_mission(mission_waypoints, jump_to_seq=loop_to_seq)
+            if loop_mission and len(mission_waypoints) >= 2
+            else [dict(item) for item in mission_waypoints]
+        )
 
         download_method = getattr(commands, "download", None)
         wait_ready_method = getattr(commands, "wait_ready", None)
@@ -86,7 +93,7 @@ def upload_mission(
 
         uploaded_count = 0
         try:
-            for item in mission_waypoints:
+            for item in mission_items_to_upload:
                 waypoint = MAVLinkMissionWaypoint.model_validate(item)
                 add_method = getattr(commands, "add", None)
                 if not callable(add_method):
@@ -191,7 +198,9 @@ def upload_mission(
 
         return {
             "connection_string": connection_string,
-            "uploaded_waypoints": uploaded_count,
+            "uploaded_waypoints": len(mission_waypoints),
+            "uploaded_mission_items": uploaded_count,
+            "loop_enabled": loop_mission and len(mission_waypoints) >= 2,
             "mode": _vehicle_mode_name(vehicle),
             "armed": bool(getattr(vehicle, "armed", False)),
         }
@@ -232,6 +241,59 @@ def _default_vehicle_mode_factory(mode_name: str) -> Any:
             "DroneKit is required for mission upload mode changes. Install it with `pip install dronekit`."
         ) from exc
     return VehicleMode(mode_name)
+
+
+def set_vehicle_mode(
+    *,
+    connection_string: str,
+    target_mode: str,
+    baud: int = 57600,
+    connect_timeout_s: float = 30.0,
+    wait_ready: bool = True,
+    mode_change_timeout_s: float = 10.0,
+    connect_callable: VehicleConnector | None = None,
+    vehicle_mode_factory: VehicleModeFactory | None = None,
+    connect_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    connect_callable = connect_callable or _default_connect
+    vehicle_mode_factory = vehicle_mode_factory or _default_vehicle_mode_factory
+
+    connect_options = {
+        "wait_ready": wait_ready,
+        "timeout": connect_timeout_s,
+        "heartbeat_timeout": connect_timeout_s,
+        **(connect_kwargs or {}),
+    }
+    if baud:
+        connect_options.setdefault("baud", baud)
+
+    try:
+        vehicle = connect_callable(connection_string, **connect_options)
+    except Exception as exc:
+        _log_upload_exception("connecting to drone", exc)
+        raise RuntimeError(f"Failed to connect to drone for {target_mode} mode command: {exc}") from exc
+
+    try:
+        flush_method = getattr(vehicle, "flush", None)
+        print(f"[mission_uploader] Setting vehicle mode to {target_mode}")
+        vehicle.mode = vehicle_mode_factory(target_mode)
+        if callable(flush_method):
+            flush_method()
+        if not _wait_for_condition(lambda: _vehicle_mode_name(vehicle) == target_mode, mode_change_timeout_s):
+            raise RuntimeError(f"Vehicle mode remained {_vehicle_mode_name(vehicle)!r} instead of {target_mode!r}.")
+        print(f"[mission_uploader] Vehicle mode confirmed as {target_mode}")
+        return {
+            "connection_string": connection_string,
+            "mode": _vehicle_mode_name(vehicle),
+            "armed": bool(getattr(vehicle, "armed", False)),
+        }
+    except Exception as exc:
+        _log_upload_exception(f"setting {target_mode} mode", exc)
+        raise RuntimeError(f"Failed to set drone mode to {target_mode}: {exc}") from exc
+    finally:
+        close_method = getattr(vehicle, "close", None)
+        if callable(close_method):
+            close_method()
 
 
 def _disable_arming_checks(vehicle: Any) -> None:

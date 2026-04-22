@@ -577,12 +577,13 @@
 
     .side-column {
       display: grid;
-      grid-template-rows: auto minmax(230px, auto) minmax(280px, 1fr);
+      grid-template-rows: auto auto minmax(230px, auto) minmax(280px, 1fr);
       gap: 16px;
       align-content: start;
       min-height: 0;
     }
 
+    .policy-panel,
     .connection-panel,
     .fleet-panel,
     .log-panel {
@@ -595,6 +596,58 @@
 
     .connection-panel {
       grid-template-rows: auto auto auto;
+    }
+
+    .policy-panel {
+      grid-template-rows: auto auto;
+    }
+
+    .policy-form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .policy-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .policy-field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .policy-field label {
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .policy-input {
+      width: 100%;
+      padding: 10px 11px;
+      border: 1px solid rgba(117, 255, 176, 0.18);
+      background: rgba(7, 16, 13, 0.92);
+      color: var(--text);
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.84rem;
+    }
+
+    .policy-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .policy-meta {
+      font-family: "Share Tech Mono", monospace;
+      font-size: 0.76rem;
+      color: var(--muted);
     }
 
     .connection-form {
@@ -928,6 +981,10 @@
         grid-template-columns: 1fr;
       }
 
+      .policy-grid {
+        grid-template-columns: 1fr;
+      }
+
       .map-shell {
         min-height: 420px;
         height: 420px;
@@ -1024,6 +1081,38 @@
       </section>
 
       <div class="side-column">
+        <section class="panel policy-panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="panel-label">Fleet Policy</span>
+              <strong>Rotation Targets</strong>
+            </div>
+            <div class="header-meta">
+              <span id="policy-airborne-meta">AIRBORNE TARGET 1</span>
+            </div>
+          </div>
+          <form id="fleet-policy-form" class="policy-form">
+            <div class="policy-grid">
+              <div class="policy-field">
+                <label for="target-airborne-drones">Airborne Drones</label>
+                <input id="target-airborne-drones" class="policy-input" type="number" min="0" step="1" value="1">
+              </div>
+              <div class="policy-field">
+                <label for="recall-battery-threshold">Recall Battery %</label>
+                <input id="recall-battery-threshold" class="policy-input" type="number" min="0" max="100" step="1" value="25">
+              </div>
+              <div class="policy-field">
+                <label for="minimum-launch-battery">Launch Battery %</label>
+                <input id="minimum-launch-battery" class="policy-input" type="number" min="0" max="100" step="1" value="90">
+              </div>
+            </div>
+            <div class="policy-actions">
+              <div id="fleet-policy-meta" class="policy-meta">Keep 1 drone airborne while replacements wait on standby.</div>
+              <button id="save-fleet-policy" class="action-button" type="submit">Save Policy</button>
+            </div>
+          </form>
+        </section>
+
         <section class="panel connection-panel">
           <div class="panel-header">
             <div class="panel-title">
@@ -1104,6 +1193,13 @@
     const drawGeofencePrimaryButton = document.getElementById("draw-geofence-primary");
     const drawGeofenceClearButton = document.getElementById("draw-geofence-clear");
     const uploadMissionButton = document.getElementById("upload-mission");
+    const fleetPolicyForm = document.getElementById("fleet-policy-form");
+    const targetAirborneDronesInput = document.getElementById("target-airborne-drones");
+    const recallBatteryThresholdInput = document.getElementById("recall-battery-threshold");
+    const minimumLaunchBatteryInput = document.getElementById("minimum-launch-battery");
+    const saveFleetPolicyButton = document.getElementById("save-fleet-policy");
+    const fleetPolicyMeta = document.getElementById("fleet-policy-meta");
+    const policyAirborneMeta = document.getElementById("policy-airborne-meta");
     const connectionStringInput = document.getElementById("connection-string");
     const connectDroneButton = document.getElementById("connect-drone");
     const connectionStatusBadge = document.getElementById("connection-status-badge");
@@ -1333,6 +1429,28 @@
       if (!connectionStringInput.matches(":focus") && connectionPanel.connection_string) {
         connectionStringInput.value = connectionPanel.connection_string;
       }
+    }
+
+    function renderFleetPolicy(policy = null) {
+      const fleetPolicy = policy || (state.payload && state.payload.fleet_policy) || {
+        target_airborne_drones: 1,
+        recall_battery_threshold: 25,
+        minimum_launch_battery: 90
+      };
+
+      if (!targetAirborneDronesInput.matches(":focus")) {
+        targetAirborneDronesInput.value = String(fleetPolicy.target_airborne_drones);
+      }
+      if (!recallBatteryThresholdInput.matches(":focus")) {
+        recallBatteryThresholdInput.value = String(Math.round(Number(fleetPolicy.recall_battery_threshold)));
+      }
+      if (!minimumLaunchBatteryInput.matches(":focus")) {
+        minimumLaunchBatteryInput.value = String(Math.round(Number(fleetPolicy.minimum_launch_battery)));
+      }
+
+      policyAirborneMeta.textContent = `AIRBORNE TARGET ${fleetPolicy.target_airborne_drones}`;
+      fleetPolicyMeta.textContent = `Recall at ${Math.round(Number(fleetPolicy.recall_battery_threshold))}% and launch standby units at ${Math.round(Number(fleetPolicy.minimum_launch_battery))}% or higher.`;
+      saveFleetPolicyButton.disabled = false;
     }
 
     function refreshGeofenceCount() {
@@ -1592,6 +1710,7 @@
       renderOperationalLayers(payload);
       renderFleet(payload.drones || []);
       renderLog(payload.event_log || []);
+      renderFleetPolicy(payload.fleet_policy);
       renderConnectionPanel(payload.connection_panel);
       updateHeader(payload);
       updateDraftControls();
@@ -1716,6 +1835,45 @@
         })
       }));
       setAlertBanner("Telemetry link requested", connectionString);
+    }
+
+    function validateFleetPolicyInputs() {
+      const targetAirborneDrones = Number(targetAirborneDronesInput.value);
+      const recallBatteryThreshold = Number(recallBatteryThresholdInput.value);
+      const minimumLaunchBattery = Number(minimumLaunchBatteryInput.value);
+
+      if (!Number.isInteger(targetAirborneDrones) || targetAirborneDrones < 0) {
+        throw new Error("Airborne drone target must be a whole number greater than or equal to 0.");
+      }
+      if (!Number.isFinite(recallBatteryThreshold) || recallBatteryThreshold < 0 || recallBatteryThreshold > 100) {
+        throw new Error("Recall battery threshold must be between 0 and 100.");
+      }
+      if (!Number.isFinite(minimumLaunchBattery) || minimumLaunchBattery < 0 || minimumLaunchBattery > 100) {
+        throw new Error("Launch battery threshold must be between 0 and 100.");
+      }
+
+      return {
+        target_airborne_drones: targetAirborneDrones,
+        recall_battery_threshold: recallBatteryThreshold,
+        minimum_launch_battery: minimumLaunchBattery
+      };
+    }
+
+    async function saveFleetPolicy() {
+      const policy = validateFleetPolicyInputs();
+      saveFleetPolicyButton.disabled = true;
+      applyFleetPayload(await fetchJson("/api/fleet-policy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify(policy)
+      }));
+      setAlertBanner(
+        "Fleet policy updated",
+        `${policy.target_airborne_drones} airborne | recall ${policy.recall_battery_threshold}% | launch ${policy.minimum_launch_battery}%`
+      );
     }
 
     async function uploadMissionToConnectedDrone() {
@@ -1921,6 +2079,14 @@
       });
     });
 
+    fleetPolicyForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveFleetPolicy().catch((error) => {
+        saveFleetPolicyButton.disabled = false;
+        setAlertBanner("Fleet policy update failed", error.message);
+      });
+    });
+
     connectionStringInput.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") {
         return;
@@ -1999,6 +2165,7 @@
     });
 
     initializeMap();
+    renderFleetPolicy();
     renderConnectionPanel(DEFAULT_CONNECTION_PANEL);
     startClock();
     loadFleetState()

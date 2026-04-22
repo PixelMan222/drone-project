@@ -90,6 +90,25 @@ class FleetStateManager:
     def policy(self) -> FleetPolicy:
         return self._policy.model_copy(deep=True)
 
+    def update_policy(
+        self,
+        *,
+        recall_battery_threshold: float | None = None,
+        minimum_launch_battery: float | None = None,
+        target_airborne_drones: int | None = None,
+    ) -> FleetPolicy:
+        updates: dict[str, float | int] = {}
+        if recall_battery_threshold is not None:
+            updates["recall_battery_threshold"] = recall_battery_threshold
+        if minimum_launch_battery is not None:
+            updates["minimum_launch_battery"] = minimum_launch_battery
+        if target_airborne_drones is not None:
+            updates["target_airborne_drones"] = target_airborne_drones
+
+        with self._lock:
+            self._policy = self._policy.model_copy(update=updates)
+            return self._policy.model_copy(deep=True)
+
     def register_drone(self, drone: DroneState) -> DroneState:
         with self._lock:
             self._drones[drone.drone_id] = drone.model_copy(deep=True)
@@ -211,7 +230,7 @@ class FleetStateManager:
         commands: list[DroneCommand] = []
         recall_ids: set[str] = set()
         for drone in flying:
-            if drone.battery_level <= effective_policy.recall_battery_threshold:
+            if drone.battery_level <= effective_policy.recall_battery_threshold and (drone.flight_mode or "").upper() != "RTL":
                 recall_ids.add(drone.drone_id)
                 commands.append(
                     DroneCommand(

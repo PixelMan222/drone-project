@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from drone_patrol.mission_uploader import MissionUploadError, upload_mission
+from drone_patrol.mission_uploader import MissionUploadError, set_vehicle_mode, upload_mission
+from drone_patrol.patrol_routes import MAV_CMD_DO_JUMP
 
 
 class FakeCommands:
@@ -128,7 +129,7 @@ def test_upload_mission_clears_uploads_and_sets_auto_mode() -> None:
 
     assert calls[0][0] == "tcp:127.0.0.1:5760"
     assert calls[0][1]["wait_ready"] is True
-    assert vehicle.commands.actions == ["download", "wait_ready", "clear", "add", "add", "upload"]
+    assert vehicle.commands.actions == ["download", "wait_ready", "clear", "add", "add", "add", "upload"]
     assert vehicle.parameters["ARMING_CHECK"] == 0
     assert vehicle.takeoff_calls == [10.0]
     assert vehicle.mode_history == ["GUIDED", "AUTO"]
@@ -137,10 +138,15 @@ def test_upload_mission_clears_uploads_and_sets_auto_mode() -> None:
     assert vehicle.flush_called is True
     assert vehicle.closed is True
     assert result["uploaded_waypoints"] == 2
+    assert result["uploaded_mission_items"] == 3
+    assert result["loop_enabled"] is True
     assert result["mode"] == "AUTO"
     assert result["armed"] is True
     assert vehicle.commands.added[0][11] == 306275000
     assert vehicle.commands.added[0][12] == -963351000
+    assert vehicle.commands.added[-1][4] == MAV_CMD_DO_JUMP
+    assert vehicle.commands.added[-1][7] == 1.0
+    assert vehicle.commands.added[-1][8] == -1.0
 
 
 def test_upload_mission_requires_waypoints() -> None:
@@ -285,3 +291,18 @@ def test_upload_mission_warns_if_takeoff_altitude_is_not_reached(capsys: pytest.
     assert "Warning: vehicle did not reach 5.0 meters within 0.0s" in captured.out
     assert vehicle.takeoff_calls == [10.0]
     assert result["mode"] == "AUTO"
+
+
+def test_set_vehicle_mode_sets_rtl_and_waits_for_confirmation() -> None:
+    vehicle = FakeVehicle()
+
+    result = set_vehicle_mode(
+        connection_string="tcp:127.0.0.1:5760",
+        target_mode="RTL",
+        connect_callable=lambda *_args, **_kwargs: vehicle,
+        vehicle_mode_factory=lambda mode_name: mode_name,
+    )
+
+    assert vehicle.mode == "RTL"
+    assert result["mode"] == "RTL"
+    assert vehicle.closed is True

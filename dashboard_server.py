@@ -17,13 +17,13 @@ except ImportError:  # pragma: no cover
     request = None  # type: ignore[assignment]
     send_from_directory = None  # type: ignore[assignment]
 
-from drone_patrol.fleet_state import DroneState, DroneStatus, FleetStateManager, GPSPosition
+from drone_patrol.fleet_state import DroneCommandType, DroneState, DroneStatus, FleetPolicy, FleetStateManager, GPSPosition, RotationDecision
 from drone_patrol.patrol_routes import (
     generate_coverage_sweep_route,
     generate_grid_survey_route,
     generate_perimeter_patrol_route,
 )
-from drone_patrol.mission_uploader import upload_mission
+from drone_patrol.mission_uploader import set_vehicle_mode, upload_mission
 from drone_patrol.telemetry_receiver import DroneTelemetryReceiver
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -62,6 +62,7 @@ telemetry_receivers: dict[str, DroneTelemetryReceiver] = {}
 telemetry_links: dict[str, TelemetryLink] = {}
 telemetry_receiver_factory = DroneTelemetryReceiver
 mission_uploader_callable = upload_mission
+vehicle_mode_command_callable = set_vehicle_mode
 next_drone_number = 1
 server_state: dict[str, Any] = {
     "geofence": [],
@@ -179,6 +180,7 @@ def get_connection_string_for_drone(drone_id: str) -> str | None:
 def build_payload() -> dict[str, Any]:
     drones = sorted(fleet_manager.snapshot(), key=lambda drone: drone.drone_id)
     telemetry_link_payload = refresh_telemetry_links(drones)
+    policy = fleet_manager.policy
     with state_lock:
         geofence = [point.model_dump(mode="json") for point in server_state["geofence"]]
         patrol_route = [dict(item) for item in server_state["patrol_route"]]
@@ -203,6 +205,7 @@ def build_payload() -> dict[str, Any]:
             "coverage_percent": coverage_percent,
             "last_alert": last_alert,
         },
+        "fleet_policy": policy.model_dump(mode="json"),
         "drones": drone_payload,
         "geofence": geofence,
         "patrol_route": patrol_route,
@@ -217,6 +220,95 @@ def build_signature() -> str:
     payload = build_payload()
     payload.pop("generated_at", None)
     return json.dumps(payload, sort_keys=True)
+
+
+def execute_rotation_decision(decision: RotationDecision) -> None:
+    if not decision.has_commands:
+        return
+
+    recall_commands = [command for command in decision.commands if command.command == DroneCommandType.RECALL_TO_CHARGER]
+    launch_commands = [command for command in decision.commands if command.command == DroneCommandType.LAUNCH_TO_PATROL]
+
+    for command in recall_commands:
+        connection_string = get_connection_string_for_drone(command.drone_id)
+        if not connection_string:
+            append_event(
+                f"Recall failed for {command.drone_id}: no telemetry link registered",
+                level="critical",
+                meta=command.reason,
+            )
+            continue
+
+        try:
+            rtl_result = vehicle_mode_command_callable(connection_string=connection_string, target_mode="RTL")
+            fleet_manager.update_drone(
+                command.drone_id,
+                flight_mode="RTL",
+                armed=rtl_result.get("armed"),
+                updated_at=datetime.now(timezone.utc),
+                failure_reason=None,
+            )
+            append_event(
+                f"Drone {command.drone_id} recalled to launch",
+                level="alert",
+                meta=command.reason,
+            )
+        except Exception as exc:
+            append_event(
+                f"Recall failed for {command.drone_id}: {exc}",
+                level="critical",
+                meta=command.reason,
+            )
+
+    if not launch_commands:
+        return
+
+    with state_lock:
+        mission_waypoints = [dict(item) for item in server_state["patrol_route"]]
+
+    if not mission_waypoints:
+        for command in launch_commands:
+            append_event(
+                f"Launch blocked for {command.drone_id}: no active patrol route",
+                level="critical",
+                meta=command.reason,
+            )
+        return
+
+    for command in launch_commands:
+        connection_string = get_connection_string_for_drone(command.drone_id)
+        if not connection_string:
+            append_event(
+                f"Launch failed for {command.drone_id}: no telemetry link registered",
+                level="critical",
+                meta=command.reason,
+            )
+            continue
+
+        try:
+            upload_result = mission_uploader_callable(
+                connection_string=connection_string,
+                mission_waypoints=mission_waypoints,
+            )
+            fleet_manager.update_drone(
+                command.drone_id,
+                status=DroneStatus.FLYING,
+                flight_mode=str(upload_result.get("mode", "AUTO")),
+                armed=bool(upload_result.get("armed", True)),
+                updated_at=datetime.now(timezone.utc),
+                failure_reason=None,
+            )
+            append_event(
+                f"Replacement drone {command.drone_id} launched to patrol",
+                level="info",
+                meta=command.reason,
+            )
+        except Exception as exc:
+            append_event(
+                f"Launch failed for {command.drone_id}: {exc}",
+                level="critical",
+                meta=command.reason,
+            )
 
 
 def diff_and_log(previous: dict[str, dict[str, Any]], current: dict[str, dict[str, Any]]) -> None:
@@ -395,6 +487,39 @@ def create_app() -> tuple[Any, Any]:
         )
         return jsonify(build_payload())
 
+    @app.post("/api/fleet-policy")
+    def api_fleet_policy() -> Any:
+        payload = request.get_json(silent=True) or {}
+        try:
+            target_airborne_drones = int(payload.get("target_airborne_drones"))
+            recall_battery_threshold = float(payload.get("recall_battery_threshold"))
+            minimum_launch_battery = float(payload.get("minimum_launch_battery"))
+            updated_policy = FleetPolicy(
+                target_airborne_drones=target_airborne_drones,
+                recall_battery_threshold=recall_battery_threshold,
+                minimum_launch_battery=minimum_launch_battery,
+            )
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": f"Invalid fleet policy payload: {exc}"}), 400
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        fleet_manager.update_policy(
+            target_airborne_drones=updated_policy.target_airborne_drones,
+            recall_battery_threshold=updated_policy.recall_battery_threshold,
+            minimum_launch_battery=updated_policy.minimum_launch_battery,
+        )
+        append_event(
+            "Fleet policy updated",
+            level="info",
+            meta=(
+                f"{updated_policy.target_airborne_drones} airborne target | "
+                f"recall {updated_policy.recall_battery_threshold:.0f}% | "
+                f"launch {updated_policy.minimum_launch_battery:.0f}%"
+            ),
+        )
+        return jsonify(build_payload())
+
     @app.post("/api/connect")
     def api_connect() -> Any:
         payload = request.get_json(silent=True) or {}
@@ -505,6 +630,7 @@ def create_app() -> tuple[Any, Any]:
 
         while True:
             socketio.sleep(1)
+            execute_rotation_decision(fleet_manager.evaluate_rotation())
             current_drones = {
                 drone["drone_id"]: drone
                 for drone in [serialize_drone(item) for item in sorted(fleet_manager.snapshot(), key=lambda x: x.drone_id)]

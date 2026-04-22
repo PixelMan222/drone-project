@@ -9,6 +9,7 @@ from .fleet_state import GPSPosition
 
 MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
 MAV_CMD_NAV_WAYPOINT = 16
+MAV_CMD_DO_JUMP = 177
 EARTH_RADIUS_M = 6_371_000.0
 EPSILON = 1e-9
 
@@ -200,6 +201,41 @@ def _build_mission_items(
             ).to_mission_item()
         )
     return mission_items
+
+
+def append_loop_jump_to_mission(
+    mission_items: Sequence[dict[str, int | float]],
+    *,
+    jump_to_seq: int = 1,
+    repeat_count: int = -1,
+) -> list[dict[str, int | float]]:
+    if not mission_items:
+        raise ValueError("mission_items must contain at least one waypoint before a loop jump can be added.")
+
+    if jump_to_seq < 0:
+        raise ValueError("jump_to_seq must be greater than or equal to 0.")
+
+    max_seq = max(int(item["seq"]) for item in mission_items)
+    if jump_to_seq > max_seq:
+        raise ValueError("jump_to_seq must refer to an existing mission sequence number.")
+
+    looped_items = [dict(item) for item in mission_items]
+    looped_items.append(
+        MAVLinkMissionWaypoint(
+            seq=len(looped_items),
+            command=MAV_CMD_DO_JUMP,
+            current=0,
+            autocontinue=1,
+            param1=float(jump_to_seq),
+            param2=float(repeat_count),
+            param3=0.0,
+            param4=0.0,
+            x_lat=0.0,
+            y_lon=0.0,
+            z_alt=0.0,
+        ).to_mission_item()
+    )
+    return looped_items
 
 
 def _validate_altitude(altitude_m: float) -> None:

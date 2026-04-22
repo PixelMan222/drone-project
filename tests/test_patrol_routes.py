@@ -2,6 +2,8 @@ import pytest
 
 from drone_patrol.fleet_state import GPSPosition
 from drone_patrol.patrol_routes import (
+    MAV_CMD_DO_JUMP,
+    append_loop_jump_to_mission,
     generate_coverage_sweep_route,
     generate_grid_survey_route,
     generate_perimeter_patrol_route,
@@ -121,3 +123,23 @@ def test_generate_grid_survey_route_rejects_invalid_spacing() -> None:
             altitude_m=60.0,
             grid_spacing_m=0.0,
         )
+
+
+def test_append_loop_jump_to_mission_adds_infinite_do_jump() -> None:
+    mission = generate_perimeter_patrol_route(
+        [
+            GPSPosition(latitude=30.0, longitude=-97.0),
+            GPSPosition(latitude=30.0, longitude=-96.999),
+            GPSPosition(latitude=30.001, longitude=-96.999),
+        ],
+        altitude_m=60.0,
+        include_return_to_start=False,
+    )
+
+    looped = append_loop_jump_to_mission(mission, jump_to_seq=1)
+
+    assert len(looped) == len(mission) + 1
+    assert looped[-1]["seq"] == len(mission)
+    assert looped[-1]["command"] == MAV_CMD_DO_JUMP
+    assert looped[-1]["param1"] == 1.0
+    assert looped[-1]["param2"] == -1.0

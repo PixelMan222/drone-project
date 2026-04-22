@@ -140,3 +140,29 @@ def test_manager_updates_heading_mode_and_armed_state() -> None:
     assert drone.heading_deg == 182.5
     assert drone.flight_mode == "AUTO"
     assert drone.armed is True
+
+
+def test_rotation_does_not_repeat_recall_when_drone_is_already_in_rtl() -> None:
+    manager = FleetStateManager(
+        drones=[
+            DroneState(
+                drone_id="alpha",
+                battery_level=20.0,
+                status=DroneStatus.FLYING,
+                flight_mode="RTL",
+                position=GPSPosition(latitude=41.0, longitude=-87.0),
+            ),
+            DroneState(
+                drone_id="bravo",
+                battery_level=95.0,
+                status=DroneStatus.STANDBY,
+                position=GPSPosition(latitude=41.1, longitude=-87.1),
+            ),
+        ],
+        policy=FleetPolicy(recall_battery_threshold=25.0, minimum_launch_battery=90.0, target_airborne_drones=1),
+    )
+
+    decision = manager.evaluate_rotation()
+
+    assert len(decision.commands) == 0
+    assert decision.active_drone_ids == ["alpha"]
